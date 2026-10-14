@@ -1,0 +1,16 @@
+{
+    "name": "yohanan007/plugin-wordpress-ia",
+    "description": "Plugin WordPress intégrant un chatbot IA.",
+    "type": "wordpress-plugin",
+    "require": {
+        "php": ">=8.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "WPIA\\": "src/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

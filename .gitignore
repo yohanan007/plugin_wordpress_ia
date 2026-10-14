@@ -35,6 +35,14 @@ wp-config.php
 # htaccess
 /.htaccess
 
+#composer
+/vendor/*
+
+agent.md
+claude.md
+deny.md
+model.md
+
 # All plugins
 #
 # Note: If you wish to whitelist plugins,
