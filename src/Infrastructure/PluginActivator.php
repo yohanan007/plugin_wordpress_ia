@@ -10,6 +10,6 @@ class PluginActivator {
 	}
 
 	public static function deactivate(): void {
-		// Data is intentionally retained when the plugin is deactivated.
+		wp_clear_scheduled_hook( 'wpia_purge_logs' );
 	}
 }

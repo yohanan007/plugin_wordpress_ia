@@ -10,6 +10,9 @@ class Document extends Entity {
 	private string $fichier = '';
 	private string $hash = '';
 	private int $tailleTokens = 0;
+	private int $tailleOctets = 0;
+	private string $dateAjout = '';
+	private string $statutIndexation = 'pending';
 	private bool $actif = true;
 
 	public function getDesignation(): string {
@@ -55,6 +58,34 @@ class Document extends Entity {
 	public function setTailleTokens( int $taille_tokens ): void {
 		$this->assertNonNegative( $taille_tokens, 'taille_tokens' );
 		$this->tailleTokens = $taille_tokens;
+	}
+
+	public function getTailleOctets(): int {
+		return $this->tailleOctets;
+	}
+
+	public function setTailleOctets( int $taille_octets ): void {
+		$this->assertNonNegative( $taille_octets, 'taille_octets' );
+		$this->tailleOctets = $taille_octets;
+	}
+
+	public function getDateAjout(): string {
+		return $this->dateAjout;
+	}
+
+	public function setDateAjout( string $date_ajout ): void {
+		$this->dateAjout = $date_ajout;
+	}
+
+	public function getStatutIndexation(): string {
+		return $this->statutIndexation;
+	}
+
+	public function setStatutIndexation( string $statut_indexation ): void {
+		if ( ! in_array( $statut_indexation, array( 'pending', 'ready', 'error' ), true ) ) {
+			throw new InvalidArgumentException( 'The document processing status is invalid.' );
+		}
+		$this->statutIndexation = $statut_indexation;
 	}
 
 	public function isActif(): bool {
