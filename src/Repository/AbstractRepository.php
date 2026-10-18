@@ -135,6 +135,34 @@ abstract class AbstractRepository {
 		return $result;
 	}
 
+	/**
+	 * @param array<string, scalar> $criteria
+	 */
+	public function countAll( array $criteria = array() ): int {
+		$criteria = $this->validateData( $criteria, true );
+		$sql      = 'SELECT COUNT(*) FROM ' . $this->getTableName();
+		$values   = array_values( $criteria );
+
+		if ( ! empty( $criteria ) ) {
+			$conditions = array();
+			foreach ( array_keys( $criteria ) as $column ) {
+				$conditions[] = '`' . $column . '` = ' . $this->columns[ $column ];
+			}
+			$sql .= ' WHERE ' . implode( ' AND ', $conditions );
+		}
+
+		$this->clearDatabaseError();
+		$count = $this->wpdb->get_var(
+			empty( $values ) ? $sql : $this->wpdb->prepare( $sql, ...$values )
+		);
+
+		if ( '' !== $this->wpdb->last_error ) {
+			$this->throwDatabaseError();
+		}
+
+		return (int) $count;
+	}
+
 	private function getTableName(): string {
 		return $this->wpdb->prefix . 'wpia_' . $this->table_suffix;
 	}

@@ -56,7 +56,7 @@ class DatabaseInstaller {
 				modele varchar(191) NOT NULL,
 				system_prompt longtext NOT NULL,
 				max_tokens int(10) unsigned NOT NULL DEFAULT 1024,
-				temperature decimal(5,2) NOT NULL DEFAULT 0.70,
+				temperature decimal(5,2) NOT NULL DEFAULT 0.30,
 				actif tinyint(1) NOT NULL DEFAULT 1,
 				PRIMARY KEY  (id),
 				KEY compte_api_id (compte_api_id)
@@ -68,6 +68,9 @@ class DatabaseInstaller {
 				fichier text NOT NULL,
 				hash char(64) NOT NULL,
 				taille_tokens bigint(20) unsigned NOT NULL DEFAULT 0,
+				taille_octets bigint(20) unsigned NOT NULL DEFAULT 0,
+				date_ajout datetime NULL,
+				statut_indexation varchar(20) NOT NULL DEFAULT 'pending',
 				actif tinyint(1) NOT NULL DEFAULT 1,
 				PRIMARY KEY  (id)
 			) {$charset_collate};",
@@ -113,6 +116,16 @@ class DatabaseInstaller {
 				PRIMARY KEY  (id),
 				UNIQUE KEY chatbot_session (chatbot_id,session_id),
 				KEY ip_hash (ip_hash)
+			) {$charset_collate};",
+			'log'                 => "CREATE TABLE {$prefix}wpia_log (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				niveau varchar(20) NOT NULL,
+				categorie varchar(40) NOT NULL,
+				message text NOT NULL,
+				date_creation datetime NOT NULL,
+				PRIMARY KEY  (id),
+				KEY categorie_date (categorie,date_creation),
+				KEY date_creation (date_creation)
 			) {$charset_collate};",
 		);
 	}
