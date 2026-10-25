@@ -19,7 +19,7 @@ if ( ! defined( 'WPIA_VERSION' ) ) {
 }
 
 if ( ! defined( 'WPIA_DB_VERSION' ) ) {
-	define( 'WPIA_DB_VERSION', '1.0.0' );
+	define( 'WPIA_DB_VERSION', '1.1.0' );
 }
 
 require_once __DIR__ . '/vendor/autoload.php';
@@ -41,5 +41,13 @@ add_action(
 			new WPIA\Database\DatabaseInstaller()
 		);
 		$migration_manager->run();
+	}
+);
+
+add_action(
+	'plugins_loaded',
+	static function (): void {
+		( new WPIA\Admin\AdminController() )->register();
+		( new WPIA\Service\LogRetentionManager() )->register();
 	}
 );
