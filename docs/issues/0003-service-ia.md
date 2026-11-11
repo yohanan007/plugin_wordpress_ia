@@ -249,3 +249,42 @@ gestion des secrets ;
 convention de développement pour les futurs fournisseurs.
 
 Cette version est plus précise pour un agent IA de développement tout en restant compatible avec une architecture WordPress/PHP 8 simple et sans surdécoupage.
+
+---
+---
+
+# Revue du 2026-11-11
+
+> Section ajoutée après coup. Le texte d'origine ci-dessus est conservé tel quel.
+
+## Critique
+
+**Statut :** livrée (GitHub #8, commit `ac94b4f`). C'est l'issue la plus solide du lot : responsabilités claires, règles sur les secrets précises, liste des erreurs à couvrir.
+
+- **Mise en forme perdue**, comme pour 0002.
+- **Reste de rédaction** : la dernière phrase (« Cette version est plus précise pour un agent IA… ») est un commentaire de l'outil qui a rédigé l'issue, pas une exigence.
+- **Limite de conception, la plus importante** : le service livré expose `generate( string $prompt )`.
+  - Il ne fait **qu'un seul échange** : pas d'historique de conversation, donc pas de vrai chat.
+  - Le **contexte documentaire** n'a pas de place à lui. Il faudrait le concaténer au prompt utilisateur, ce qui mélange données et instructions, à l'inverse de ce que demande `claude.md` (« sécurité de l'IA »).
+  - Il charge **un chatbot unique** depuis la configuration. Un shortcode `[wpia_chat id="2"]` ne pourra pas choisir son chatbot.
+  - Il ne permet pas aux limites (005) de **réserver** des tokens avant l'appel, puis de les corriger après.
+  
+  **Aucune issue ne prévoit cette évolution**, alors que 005, 006 et 007 en dépendent. Elle est l'objet de la nouvelle issue [008](008-generation-multitours.md).
+- **Critère coûteux** : « Génération valide avec OpenAI, Mistral, Anthropic, Ollama et fournisseur personnalisé » suppose 4 comptes payants et des tests manuels répétés. Mieux vaut : des tests unitaires avec réponses HTTP simulées pour les 5 fournisseurs, plus un test réel sur 1 ou 2 fournisseurs.
+- **Environnement de développement** (Windows 11, VS Code) : ce n'est pas une contrainte technique de l'issue, cela relève de `claude.md`.
+
+## Issue proposée (reliquat)
+
+**Titre :** #8 – Clôture du service de génération IA
+**Dépend de :** aucune · **Suite :** [008 – Génération multi-tours](008-generation-multitours.md)
+
+### Tâches
+
+- [ ] Remettre en forme le texte d'origine en Markdown et retirer la phrase finale parasite.
+- [ ] Vérifier que `tests/run.php` couvre, pour **chaque** fournisseur, une réponse simulée de succès, une erreur 401, un timeout (`WP_Error`), un JSON invalide et une réponse vide.
+- [ ] Documenter dans `documentation/generation-ia.md` les fournisseurs testés en réel et la date du test.
+
+### Critères d'acceptation
+
+- `php tests/run.php` passe, avec au moins 5 cas par fournisseur.
+- Une recherche dans les logs après un échec 401 ne trouve ni la clé API, ni l'URL complète, ni le prompt.
