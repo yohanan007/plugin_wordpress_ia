@@ -14,6 +14,8 @@ class DatabaseInstaller {
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
+		$this->migrateUsageTable( $wpdb );
+
 		$charset_collate = $wpdb->get_charset_collate();
 		$tables          = $this->getTableDefinitions( $wpdb->prefix, $charset_collate );
 
@@ -25,6 +27,39 @@ class DatabaseInstaller {
 		}
 
 		update_option( 'wpia_db_version', WPIA_DB_VERSION );
+	}
+
+	/**
+	 * Migration 1.2.0 : l'ancienne table de limites (clé chatbot/session, sans jour)
+	 * est incompatible avec le nouveau schéma, et dbDelta ne supprime ni index ni
+	 * colonne. Elle n'a jamais été alimentée : elle est supprimée si elle est vide,
+	 * sinon renommée pour conserver les données. Idempotent : sans effet une fois
+	 * la colonne `portee` présente.
+	 */
+	private function migrateUsageTable( \wpdb $wpdb ): void {
+		$table  = $wpdb->prefix . 'wpia_limite_utilisation';
+		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
+		if ( $table !== $exists ) {
+			return;
+		}
+
+		$has_new_schema = $wpdb->get_var( $wpdb->prepare( 'SHOW COLUMNS FROM `' . $table . '` LIKE %s', 'portee' ) );
+		if ( null !== $has_new_schema ) {
+			return;
+		}
+
+		$count = (int) $wpdb->get_var( 'SELECT COUNT(*) FROM `' . $table . '`' );
+		if ( 0 === $count ) {
+			$result = $wpdb->query( 'DROP TABLE `' . $table . '`' );
+		} else {
+			$backup = $table . '_old_110';
+			$result = $wpdb->query( 'RENAME TABLE `' . $table . '` TO `' . $backup . '`' );
+			error_log( 'WPIA: legacy usage table was not empty and has been renamed to ' . $backup . '.' );
+		}
+
+		if ( false === $result ) {
+			throw new RuntimeException( 'Unable to migrate the usage table: ' . $wpdb->last_error );
+		}
 	}
 
 	/**
@@ -107,15 +142,17 @@ class DatabaseInstaller {
 			) {$charset_collate};",
 			'limite_utilisation'  => "CREATE TABLE {$prefix}wpia_limite_utilisation (
 				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
-				chatbot_id bigint(20) unsigned NOT NULL,
-				session_id varchar(64) NOT NULL,
-				ip_hash char(64) NOT NULL,
-				nb_messages_jour int(10) unsigned NOT NULL DEFAULT 0,
-				nb_tokens_jour bigint(20) unsigned NOT NULL DEFAULT 0,
+				chatbot_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				portee varchar(10) NOT NULL,
+				identifiant varchar(70) NOT NULL DEFAULT '',
+				jour date NOT NULL,
+				nb_messages int(10) unsigned NOT NULL DEFAULT 0,
+				nb_tokens bigint(20) unsigned NOT NULL DEFAULT 0,
+				alerte_envoyee tinyint(1) NOT NULL DEFAULT 0,
 				date_maj datetime NOT NULL,
 				PRIMARY KEY  (id),
-				UNIQUE KEY chatbot_session (chatbot_id,session_id),
-				KEY ip_hash (ip_hash)
+				UNIQUE KEY portee_jour (chatbot_id,portee,identifiant,jour),
+				KEY portee_maj (portee,date_maj)
 			) {$charset_collate};",
 			'log'                 => "CREATE TABLE {$prefix}wpia_log (
 				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
