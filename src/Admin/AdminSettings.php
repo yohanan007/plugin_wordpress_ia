@@ -16,6 +16,7 @@ class AdminSettings {
 			'daily_token_limit'      => 10000,
 			'token_alert_threshold'  => 80,
 			'log_retention'          => 'weekly',
+			'usage_retention_days'   => 7,
 			'chatbot_enabled'        => 0,
 			'chatbot_template'       => '',
 			'api_timeout'            => 30,
@@ -51,6 +52,7 @@ class AdminSettings {
 			'daily_token_limit'       => array( 1, 10000000 ),
 			'token_alert_threshold'   => array( 1, 100 ),
 			'api_timeout'             => array( 1, 120 ),
+			'usage_retention_days'    => array( 1, 365 ),
 		);
 
 		foreach ( $numeric_ranges as $key => $range ) {
@@ -114,12 +116,13 @@ class AdminSettings {
 		);
 
 		$fields = array(
-			'max_tokens_request'      => __( 'Tokens maximum par requête', 'plugin-wordpress-ia' ),
+			'max_tokens_request'      => __( 'Tokens maximum par réponse', 'plugin-wordpress-ia' ),
 			'max_tokens_conversation' => __( 'Tokens maximum par conversation', 'plugin-wordpress-ia' ),
-			'max_messages_user'       => __( 'Messages maximum par utilisateur et par jour', 'plugin-wordpress-ia' ),
-			'daily_token_limit'       => __( 'Limite de tokens journalière', 'plugin-wordpress-ia' ),
-			'token_alert_threshold'   => __( 'Seuil d’avertissement (pourcentage)', 'plugin-wordpress-ia' ),
+			'max_messages_user'       => __( 'Messages maximum par visiteur et par jour', 'plugin-wordpress-ia' ),
+			'daily_token_limit'       => __( 'Budget journalier du site (tokens, tous visiteurs)', 'plugin-wordpress-ia' ),
+			'token_alert_threshold'   => __( 'Seuil d’alerte e-mail (pourcentage du budget)', 'plugin-wordpress-ia' ),
 			'api_timeout'             => __( 'Délai maximal du test API (secondes)', 'plugin-wordpress-ia' ),
+			'usage_retention_days'    => __( 'Conservation des compteurs visiteurs (jours)', 'plugin-wordpress-ia' ),
 		);
 
 		foreach ( $fields as $key => $label ) {

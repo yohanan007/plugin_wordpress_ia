@@ -4,10 +4,12 @@ namespace WPIA\Domain;
 
 class LimiteUtilisation extends Entity {
 	private int $chatbotId = 0;
-	private string $sessionId = '';
-	private string $ipHash = '';
-	private int $nbMessagesJour = 0;
-	private int $nbTokensJour = 0;
+	private string $portee = '';
+	private string $identifiant = '';
+	private string $jour = '';
+	private int $nbMessages = 0;
+	private int $nbTokens = 0;
+	private bool $alerteEnvoyee = false;
 	private string $dateMaj = '';
 
 	public function getChatbotId(): int {
@@ -15,42 +17,58 @@ class LimiteUtilisation extends Entity {
 	}
 
 	public function setChatbotId( int $chatbot_id ): void {
-		$this->assertPositive( $chatbot_id, 'chatbot_id' );
+		$this->assertNonNegative( $chatbot_id, 'chatbot_id' );
 		$this->chatbotId = $chatbot_id;
 	}
 
-	public function getSessionId(): string {
-		return $this->sessionId;
+	public function getPortee(): string {
+		return $this->portee;
 	}
 
-	public function setSessionId( string $session_id ): void {
-		$this->sessionId = $session_id;
+	public function setPortee( string $portee ): void {
+		$this->portee = $portee;
 	}
 
-	public function getIpHash(): string {
-		return $this->ipHash;
+	public function getIdentifiant(): string {
+		return $this->identifiant;
 	}
 
-	public function setIpHash( string $ip_hash ): void {
-		$this->ipHash = $ip_hash;
+	public function setIdentifiant( string $identifiant ): void {
+		$this->identifiant = $identifiant;
 	}
 
-	public function getNbMessagesJour(): int {
-		return $this->nbMessagesJour;
+	public function getJour(): string {
+		return $this->jour;
 	}
 
-	public function setNbMessagesJour( int $nb_messages_jour ): void {
-		$this->assertNonNegative( $nb_messages_jour, 'nb_messages_jour' );
-		$this->nbMessagesJour = $nb_messages_jour;
+	public function setJour( string $jour ): void {
+		$this->jour = $jour;
 	}
 
-	public function getNbTokensJour(): int {
-		return $this->nbTokensJour;
+	public function getNbMessages(): int {
+		return $this->nbMessages;
 	}
 
-	public function setNbTokensJour( int $nb_tokens_jour ): void {
-		$this->assertNonNegative( $nb_tokens_jour, 'nb_tokens_jour' );
-		$this->nbTokensJour = $nb_tokens_jour;
+	public function setNbMessages( int $nb_messages ): void {
+		$this->assertNonNegative( $nb_messages, 'nb_messages' );
+		$this->nbMessages = $nb_messages;
+	}
+
+	public function getNbTokens(): int {
+		return $this->nbTokens;
+	}
+
+	public function setNbTokens( int $nb_tokens ): void {
+		$this->assertNonNegative( $nb_tokens, 'nb_tokens' );
+		$this->nbTokens = $nb_tokens;
+	}
+
+	public function isAlerteEnvoyee(): bool {
+		return $this->alerteEnvoyee;
+	}
+
+	public function setAlerteEnvoyee( bool $alerte_envoyee ): void {
+		$this->alerteEnvoyee = $alerte_envoyee;
 	}
 
 	public function getDateMaj(): string {

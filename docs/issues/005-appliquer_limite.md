@@ -145,3 +145,24 @@ Avec `daily_token_limit` = 1 000, `max_messages_user` = 3, `max_tokens_conversat
 ### Tests
 
 Ajouter `wpia_limite_utilisation` au faux `wpdb` de `tests/run.php`, y compris le comportement de l'`UPDATE` conditionnel (lignes modifiées), et couvrir chaque critère ci-dessus.
+
+---
+
+# Revue d'implémentation du 2026-11-12
+
+> Écarts par rapport à l'issue proposée ci-dessus, constatés à l'analyse du code.
+
+| Point de la spec | Décision retenue | Raison |
+|---|---|---|
+| Migration : `DROP INDEX` puis `dbDelta`, anciennes colonnes conservées | Table **supprimée si vide**, sinon **renommée** en `_old_110`, puis recréée | Les anciennes colonnes `session_id` et `ip_hash` sont `NOT NULL` sans défaut : tout `INSERT` du nouveau code échouerait en mode SQL strict. Renommer plutôt qu'arrêter évite une erreur fatale sur `plugins_loaded`. |
+| « Le test de connexion admin compte dans la portée site » | Sans objet | Le test fait un `GET /models` et ne consomme aucun token. |
+| Alerte une fois par jour via l'option `wpia_alert_sent` | Colonne `alerte_envoyee` sur la ligne site du jour, `UPDATE … WHERE alerte_envoyee = 0` | Une option lue puis écrite laisse partir deux e-mails en cas de requêtes simultanées. L'option `wpia_alert_last` ne sert plus qu'à l'affichage. |
+| Correction « sans descendre sous 0 » | `IF(col > x, col - x, 0)` | Colonnes non signées : une soustraction négative provoque une erreur MySQL. |
+| Échec de l'appel : la réservation est libérée | Libérée pour une erreur réseau, un timeout ou un statut hors 2xx ; **estimation conservée** pour une réponse 2xx inexploitable | Une réponse 2xx a été facturée par le fournisseur. |
+| Portée session | Appliquée seulement si un jeton est transmis (`$contexte['session']`) | Le cookie `wpia_session` arrive avec 007. |
+| Faux `wpdb` interprétant le SQL | Interface `UsageStore` avec un double en mémoire, plus un faux `wpdb` qui enregistre le SQL du repository | Le faux `wpdb` existant convertit tous les paramètres en entiers. Interpréter du SQL serait fragile. |
+| Erreur de base de données pendant la réservation | Refus `wpia_usage_unavailable` (503), sans appel au fournisseur | Échec fermé : protège la facture. |
+| *(ajout)* IPv6 | Comptée par préfixe /64 | Les adresses temporaires IPv6 permettraient de contourner le quota. |
+| *(ajout)* Purge des données des visiteurs | Cron quotidien `wpia_purge_usage` : suppression des lignes visiteur et session dont `date_maj` est plus ancienne que `usage_retention_days` (7 jours par défaut, de 1 à 365). Les lignes site sont conservées. | Ne pas conserver indéfiniment des identifiants pseudonymes de visiteurs (minimisation RGPD). |
+
+Documentation : [documentation/limites.md](../../documentation/limites.md).

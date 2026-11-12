@@ -22,6 +22,11 @@ Le résultat comporte le texte (`content`), le modèle utilisé (`model`) et les
 compteurs de tokens connus (`usage.input_tokens`, `usage.output_tokens` et
 `usage.total_tokens`). Les compteurs inconnus valent `null`.
 
+Un second argument optionnel `$contexte` précise l'identité utilisée par les
+limites de consommation : `visiteur` (identifiant déjà pseudonymisé, calculé par
+défaut depuis la requête) et `session` (jeton brut de conversation, haché avant
+stockage). Les limites sont décrites dans [limites.md](limites.md).
+
 ## Flux et paramètres
 
 1. Le service charge les identifiants de fournisseur, compte API et chatbot de
@@ -32,6 +37,9 @@ compteurs de tokens connus (`usage.input_tokens`, `usage.output_tokens` et
    et `max_tokens_request`. Le timeout provient de `api_timeout`.
 4. La clé est déchiffrée avec `SecretCipher` juste avant la requête ; elle n’est
    jamais placée dans le résultat, un message d’erreur ou un journal.
+   La consommation est ensuite réservée auprès de `UsageLimiter`. Si une limite
+   est atteinte, `generate()` renvoie `wpia_limit_reached` (statut 429) sans
+   appeler le fournisseur.
 5. L’adaptateur réalise la requête HTTP. `ResponseNormalizer` valide le statut,
    le JSON, le texte et les compteurs avant de retourner le résultat standard.
 
