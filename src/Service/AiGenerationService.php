@@ -14,13 +14,18 @@ use WPIA\Service\Fournisseur\CustomProvider;
 use WPIA\Service\Fournisseur\MistralProvider;
 use WPIA\Service\Fournisseur\OllamaProvider;
 use WPIA\Service\Fournisseur\OpenAiProvider;
+use WPIA\Repository\LimiteUtilisationRepository;
+use WPIA\Service\Usage\UsageLimiter;
+use WPIA\Service\Usage\VisitorIdentity;
 
 class AiGenerationService {
 	private ?\wpdb $wpdb;
 	private SecretCipher $cipher;
 	private ResponseNormalizer $normalizer;
+	private ?UsageLimiter $limiter;
+	private VisitorIdentity $identity;
 
-	public function __construct( ?\wpdb $wpdb = null, ?SecretCipher $cipher = null, ?ResponseNormalizer $normalizer = null ) {
+	public function __construct( ?\wpdb $wpdb = null, ?SecretCipher $cipher = null, ?ResponseNormalizer $normalizer = null, ?UsageLimiter $limiter = null, ?VisitorIdentity $identity = null ) {
 		if ( null === $wpdb && isset( $GLOBALS['wpdb'] ) && $GLOBALS['wpdb'] instanceof \wpdb ) {
 			$wpdb = $GLOBALS['wpdb'];
 		}
@@ -28,12 +33,17 @@ class AiGenerationService {
 		$this->wpdb       = $wpdb;
 		$this->cipher     = $cipher ?? new SecretCipher();
 		$this->normalizer = $normalizer ?? new ResponseNormalizer();
+		$this->limiter    = $limiter ?? ( null !== $wpdb ? new UsageLimiter( new LimiteUtilisationRepository( $wpdb ) ) : null );
+		$this->identity   = $identity ?? new VisitorIdentity();
 	}
 
 	/**
+	 * @param array{visiteur?:string,session?:string} $contexte
+	 *        visiteur : identifiant pseudonyme déjà calculé (par défaut : VisitorIdentity::fromRequest()).
+	 *        session  : jeton brut de conversation (cookie wpia_session), haché avant stockage.
 	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int}}|\WP_Error
 	 */
-	public function generate( string $prompt ): array|\WP_Error {
+	public function generate( string $prompt, array $contexte = array() ): array|\WP_Error {
 		if ( '' === trim( $prompt ) ) {
 			return $this->failure( 'wpia_invalid_request', __( 'Le prompt ne peut pas être vide.', 'plugin-wordpress-ia' ) );
 		}
@@ -80,6 +90,24 @@ class AiGenerationService {
 			}
 		}
 
+		if ( null === $this->limiter ) {
+			return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est indisponible.', 'plugin-wordpress-ia' ) );
+		}
+
+		// Réservation avant l'appel : en cas de refus, le fournisseur n'est pas contacté.
+		$estimation  = $this->limiter->estimer( array( $config['system_prompt'], $prompt ), $config['max_tokens'] );
+		$reservation = $this->limiter->reserver(
+			$config['chatbot_id'],
+			array(
+				'visiteur' => isset( $contexte['visiteur'] ) && is_string( $contexte['visiteur'] ) ? $contexte['visiteur'] : $this->identity->fromRequest(),
+				'session'  => isset( $contexte['session'] ) && is_string( $contexte['session'] ) ? $this->identity->forSession( $contexte['session'] ) : '',
+			),
+			$estimation
+		);
+		if ( is_wp_error( $reservation ) ) {
+			return $this->logFailure( 'limits', $reservation );
+		}
+
 		$provider = $this->getProvider( $config['provider'] );
 		$response = $provider->generate(
 			$config['url'],
@@ -96,8 +124,17 @@ class AiGenerationService {
 
 		$result = $this->normalizer->normalize( $config['provider'], $response, $config['model'], $config['max_tokens'] );
 		if ( is_wp_error( $result ) ) {
+			// Une réponse 2xx a été facturée même si elle est inexploitable :
+			// l'estimation est conservée. Sinon (réseau, 4xx, 5xx), on libère.
+			if ( $this->wasBilled( $response ) ) {
+				$this->limiter->confirmer( $reservation, null );
+			} else {
+				$this->limiter->annuler( $reservation );
+			}
 			return $this->logFailure( $config['provider'], $result );
 		}
+
+		$this->limiter->confirmer( $reservation, $result['usage']['total_tokens'] );
 
 		return $result;
 	}
@@ -157,6 +194,7 @@ class AiGenerationService {
 		}
 
 		return array(
+			'chatbot_id'    => $chatbot_id,
 			'provider'      => $type,
 			'url'            => $url,
 			'model'          => $model,
@@ -195,6 +233,18 @@ class AiGenerationService {
 		return new $provider_class();
 	}
 
+	/**
+	 * @param mixed $response
+	 */
+	private function wasBilled( $response ): bool {
+		if ( ! is_array( $response ) ) {
+			return false;
+		}
+
+		$status = (int) wp_remote_retrieve_response_code( $response );
+		return $status >= 200 && $status < 300;
+	}
+
 	private function failure( string $code, string $message ): \WP_Error {
 		return new \WP_Error( $code, $message );
 	}
@@ -204,7 +254,7 @@ class AiGenerationService {
 	 * @return \WP_Error
 	 */
 	private function logFailure( string $provider, \WP_Error $error ): \WP_Error {
-		$provider = in_array( $provider, array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom', 'configuration' ), true )
+		$provider = in_array( $provider, array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom', 'configuration', 'limits' ), true )
 			? $provider
 			: 'configuration';
 		$code = sanitize_key( $error->get_error_code() );

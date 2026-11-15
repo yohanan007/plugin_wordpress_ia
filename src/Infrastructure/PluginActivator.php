@@ -11,5 +11,6 @@ class PluginActivator {
 
 	public static function deactivate(): void {
 		wp_clear_scheduled_hook( 'wpia_purge_logs' );
+		wp_clear_scheduled_hook( 'wpia_purge_usage' );
 	}
 }
