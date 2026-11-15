@@ -10,10 +10,12 @@ use WPIA\Repository\CompteApiRepository;
 use WPIA\Repository\ConversationRepository;
 use WPIA\Repository\DocumentRepository;
 use WPIA\Repository\FournisseurIARepository;
+use WPIA\Repository\LimiteUtilisationRepository;
 use WPIA\Repository\LogRepository;
 use WPIA\Service\AIProviderCatalog;
 use WPIA\Service\DocumentStorage;
 use WPIA\Service\SecretCipher;
+use WPIA\Service\Usage\UsageLimiter;
 
 class AdminController {
 	private const CONFIG_OPTION = 'wpia_active_configuration';
@@ -167,15 +169,8 @@ class AdminController {
 		$conversations = new ConversationRepository( $wpdb );
 		$configuration = $this->getConfigurationRows();
 		$settings      = AdminSettings::get();
-		$today         = current_time( 'Y-m-d 00:00:00' );
-		$token_result  = $wpdb->get_var(
-			$wpdb->prepare(
-				'SELECT COALESCE(SUM(tokens), 0) FROM ' . $wpdb->prefix . 'wpia_message WHERE date_creation >= %s',
-				$today
-			)
-		);
-		$tokens        = '' === $wpdb->last_error ? (int) $token_result : null;
-		$threshold     = (int) ceil( (int) $settings['daily_token_limit'] * ( (int) $settings['token_alert_threshold'] / 100 ) );
+		$usage         = $this->getSiteUsage();
+		$tokens        = null === $usage ? null : $usage['tokens'];
 		$test_result   = get_option( 'wpia_api_test_result', array() );
 		if ( ! is_array( $test_result ) ) {
 			$test_result = array();
@@ -203,8 +198,8 @@ class AdminController {
 					<strong class="wpia-stat-value"><?php echo esc_html( (string) $conversations->countAll() ); ?></strong>
 				</div>
 				<div class="wpia-stat-card">
-					<span class="wpia-stat-label"><?php esc_html_e( 'Tokens enregistrés aujourd’hui', 'plugin-wordpress-ia' ); ?></span>
-					<strong class="wpia-stat-value"><?php echo null === $tokens ? esc_html__( 'Indisponible', 'plugin-wordpress-ia' ) : esc_html( number_format_i18n( $tokens ) ); ?></strong>
+					<span class="wpia-stat-label"><?php esc_html_e( 'Tokens consommés aujourd’hui', 'plugin-wordpress-ia' ); ?></span>
+					<strong class="wpia-stat-value"><?php echo null === $tokens ? esc_html__( 'Indisponible', 'plugin-wordpress-ia' ) : esc_html( number_format_i18n( $tokens ) . ' / ' . number_format_i18n( (int) $settings['daily_token_limit'] ) ); ?></strong>
 				</div>
 			</div>
 			<section class="wpia-panel wpia-connection-panel">
@@ -229,19 +224,8 @@ class AdminController {
 				</div>
 				<a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=' . self::PAGE_AI ) ); ?>"><?php esc_html_e( 'Configurer et tester', 'plugin-wordpress-ia' ); ?></a>
 			</section>
-			<?php if ( null !== $tokens && $tokens >= $threshold ) : ?>
-				<div class="notice notice-warning inline"><p>
-					<?php
-					printf(
-						/* translators: 1: number of tokens used, 2: daily token limit. */
-						esc_html__( 'Avertissement : %1$s tokens enregistrés aujourd’hui, seuil configuré à %2$s.', 'plugin-wordpress-ia' ),
-						esc_html( number_format_i18n( $tokens ) ),
-						esc_html( number_format_i18n( (int) $settings['daily_token_limit'] ) )
-					);
-					?>
-				</p></div>
-			<?php endif; ?>
-			<p><?php esc_html_e( 'Les limites sont configurées pour les fonctionnalités futures ; leur application aux conversations n’est pas incluse dans cette version.', 'plugin-wordpress-ia' ); ?></p>
+			<?php $this->renderUsageWarning( $usage ); ?>
+			<p><?php esc_html_e( 'Les limites sont appliquées avant chaque génération : au-delà du budget journalier du site ou du quota d’un visiteur, la demande est refusée sans appel au fournisseur.', 'plugin-wordpress-ia' ); ?></p>
 		</div>
 		<?php
 	}
@@ -500,6 +484,43 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * @return array{jour:string,tokens:int,messages:int,limite:int,seuil:int,alerte_envoyee:bool}|null
+	 */
+	private function getSiteUsage(): ?array {
+		global $wpdb;
+		try {
+			return ( new UsageLimiter( new LimiteUtilisationRepository( $wpdb ) ) )->consommationSite();
+		} catch ( \RuntimeException $exception ) {
+			return null;
+		}
+	}
+
+	/**
+	 * @param array{tokens:int,limite:int,seuil:int}|null $usage
+	 */
+	private function renderUsageWarning( ?array $usage ): void {
+		if ( null === $usage || $usage['tokens'] < $usage['seuil'] ) {
+			return;
+		}
+		$reached = $usage['tokens'] >= $usage['limite'];
+		?>
+		<div class="notice <?php echo $reached ? 'notice-error' : 'notice-warning'; ?> inline"><p>
+			<?php
+			printf(
+				$reached
+					/* translators: 1: number of tokens used, 2: daily site budget. */
+					? esc_html__( 'Budget atteint : %1$s tokens consommés aujourd’hui sur %2$s. Les nouvelles demandes sont refusées jusqu’à demain.', 'plugin-wordpress-ia' )
+					/* translators: 1: number of tokens used, 2: daily site budget. */
+					: esc_html__( 'Avertissement : %1$s tokens consommés aujourd’hui sur un budget de %2$s.', 'plugin-wordpress-ia' ),
+				esc_html( number_format_i18n( $usage['tokens'] ) ),
+				esc_html( number_format_i18n( $usage['limite'] ) )
+			);
+			?>
+		</p></div>
+		<?php
+	}
+
 	public function renderAlerts(): void {
 		$this->authorize();
 		?>
@@ -507,7 +528,39 @@ class AdminController {
 			<h1><?php esc_html_e( 'Limites et alerte token', 'plugin-wordpress-ia' ); ?></h1>
 			<?php $this->renderNotice(); ?>
 			<?php settings_errors( AdminSettings::OPTION_NAME ); ?>
-			<p><?php esc_html_e( 'Les valeurs par défaut sont prudentes et les valeurs déjà enregistrées sont conservées. L’avertissement du tableau de bord compare les tokens enregistrés aujourd’hui à la limite journalière.', 'plugin-wordpress-ia' ); ?></p>
+			<?php
+			$usage      = $this->getSiteUsage();
+			$last_alert = get_option( UsageLimiter::ALERT_OPTION, '' );
+			?>
+			<section class="wpia-panel">
+				<h2><?php esc_html_e( 'Consommation du jour', 'plugin-wordpress-ia' ); ?></h2>
+				<?php if ( null === $usage ) : ?>
+					<p><?php esc_html_e( 'Indisponible', 'plugin-wordpress-ia' ); ?></p>
+				<?php else : ?>
+					<p>
+						<?php
+						printf(
+							/* translators: 1: tokens used today, 2: daily site budget, 3: alert threshold in tokens, 4: number of messages today. */
+							esc_html__( '%1$s tokens consommés sur un budget de %2$s (alerte à %3$s) — %4$s messages.', 'plugin-wordpress-ia' ),
+							esc_html( number_format_i18n( $usage['tokens'] ) ),
+							esc_html( number_format_i18n( $usage['limite'] ) ),
+							esc_html( number_format_i18n( $usage['seuil'] ) ),
+							esc_html( number_format_i18n( $usage['messages'] ) )
+						);
+						?>
+					</p>
+				<?php endif; ?>
+				<p>
+					<?php
+					echo is_string( $last_alert ) && '' !== $last_alert
+						/* translators: %s: date of the last alert e-mail. */
+						? esc_html( sprintf( __( 'Dernière alerte envoyée : %s', 'plugin-wordpress-ia' ), $last_alert ) )
+						: esc_html__( 'Aucune alerte envoyée.', 'plugin-wordpress-ia' );
+					?>
+				</p>
+			</section>
+			<?php $this->renderUsageWarning( $usage ); ?>
+			<p><?php esc_html_e( 'Le budget journalier du site s’applique à l’ensemble des visiteurs ; un e-mail est envoyé à l’administrateur une fois par jour au franchissement du seuil d’alerte. Les compteurs des visiteurs sont pseudonymisés (aucune IP en clair) et supprimés automatiquement après la durée de conservation choisie.', 'plugin-wordpress-ia' ); ?></p>
 			<form method="post" action="options.php">
 				<?php
 				settings_fields( 'wpia_admin_settings_group' );
