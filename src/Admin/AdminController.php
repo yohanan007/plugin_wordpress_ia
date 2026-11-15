@@ -230,7 +230,6 @@ class AdminController {
 		$settings      = AdminSettings::get();
 		$usage         = $this->getSiteUsage();
 		$tokens        = null === $usage ? null : $usage['tokens'];
-		// Écrit par saveTestResult(), effacé à chaque enregistrement de la configuration.
 		$test_result   = get_option( 'wpia_api_test_result', array() );
 		if ( ! is_array( $test_result ) ) {
 			$test_result = array();
@@ -569,9 +568,6 @@ class AdminController {
 	}
 
 	/**
-	 * Consommation du jour pour tout le site. Renvoie null si la lecture échoue,
-	 * pour que les pages affichent « Indisponible » au lieu de planter.
-	 *
 	 * @return array{jour:string,tokens:int,messages:int,limite:int,seuil:int,alerte_envoyee:bool}|null
 	 */
 	private function getSiteUsage(): ?array {
@@ -584,9 +580,6 @@ class AdminController {
 	}
 
 	/**
-	 * Bandeau affiché à partir du seuil d'alerte : avertissement (orange) entre le
-	 * seuil et la limite, erreur (rouge) une fois la limite atteinte. Rien sous le seuil.
-	 *
 	 * @param array{tokens:int,limite:int,seuil:int}|null $usage
 	 */
 	private function renderUsageWarning( ?array $usage ): void {
@@ -611,10 +604,6 @@ class AdminController {
 		<?php
 	}
 
-	/**
-	 * Consommation du jour, date de la dernière alerte e-mail et formulaire des
-	 * limites (champs déclarés par AdminSettings dans la section wpia_alert_settings).
-	 */
 	public function renderAlerts(): void {
 		$this->authorize();
 		?>
