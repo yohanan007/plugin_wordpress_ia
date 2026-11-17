@@ -17,8 +17,35 @@ use WPIA\Service\DocumentStorage;
 use WPIA\Service\SecretCipher;
 use WPIA\Service\Usage\UsageLimiter;
 
+/**
+ * Back-office du plugin : menus, pages d'administration et actions des formulaires.
+ *
+ * Plan du fichier :
+ * 1. Enregistrement des hooks : register(), registerSettings(), registerMenus(), enqueueAssets().
+ * 2. Pages (affichage seul) : renderDashboard(), renderDocuments(), renderAIConfiguration(),
+ *    renderSecurity(), renderLogs(), renderAlerts().
+ * 3. Enregistrement de la configuration IA : sanitizeAIConfiguration(), appelée par
+ *    l'API Settings de WordPress à la soumission du formulaire « Configuration IA ».
+ * 4. Actions admin-post (formulaires POST) : testAIConnection(), uploadDocument(),
+ *    deleteDocument(), reindexDocument(), moveDocument(), assignDocument(), deleteLog().
+ * 5. Utilitaires privés : droits, lecture de la configuration, journalisation,
+ *    redirection, messages et petits formulaires réutilisés par les pages.
+ *
+ * Toutes les actions suivent le même schéma : authorize() (droits), puis
+ * check_admin_referer() (nonce), puis le traitement, puis redirect() vers la page
+ * avec un code `wpia_notice` que renderNotice() traduit en message. redirect()
+ * se termine par `exit` : un appel à redirect() arrête toujours la méthode, d'où
+ * l'absence de `else` après chacun d'eux.
+ *
+ * La configuration active (fournisseur, compte API, chatbot) est mémorisée dans
+ * l'option CONFIG_OPTION sous forme d'identifiants uniquement ; les données
+ * elles-mêmes sont dans les tables wpia_fournisseur_ia, wpia_compte_api et wpia_chatbot.
+ */
 class AdminController {
+	/** Option qui stocke les identifiants de la configuration active (jamais de secret). */
 	private const CONFIG_OPTION = 'wpia_active_configuration';
+
+	// Slugs des pages d'administration (paramètre `page` de admin.php).
 	private const PAGE_DASHBOARD = 'wpia-dashboard';
 	private const PAGE_DOCUMENTS = 'wpia-documents';
 	private const PAGE_AI = 'wpia-ai';
@@ -26,6 +53,14 @@ class AdminController {
 	private const PAGE_LOGS = 'wpia-logs';
 	private const PAGE_ALERTS = 'wpia-alerts';
 
+	/* =====================================================================
+	 * 1. Enregistrement des hooks
+	 * ===================================================================== */
+
+	/**
+	 * Branche le contrôleur sur WordPress. Chaque action `admin_post_<nom>` répond
+	 * à un formulaire dont le champ caché `action` vaut `<nom>`.
+	 */
 	public function register(): void {
 		add_action( 'admin_init', array( $this, 'registerSettings' ) );
 		add_action( 'admin_menu', array( $this, 'registerMenus' ) );
@@ -41,6 +76,9 @@ class AdminController {
 	}
 
 	/**
+	 * Journalise les échecs de nonce sur les actions du plugin (préfixe `wpia_`).
+	 * WordPress arrête lui-même la requête ; ce hook ne sert qu'à garder une trace.
+	 *
 	 * @param string|int $action Nonce action.
 	 * @param bool       $result Nonce validation result.
 	 */
@@ -50,6 +88,11 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Déclare les deux groupes de réglages : les limites et alertes (AdminSettings)
+	 * et la configuration IA, dont la validation et l'écriture en base sont faites
+	 * par sanitizeAIConfiguration().
+	 */
 	public function registerSettings(): void {
 		( new AdminSettings() )->register();
 		register_setting(
@@ -63,6 +106,11 @@ class AdminController {
 		);
 	}
 
+	/**
+	 * Crée le menu « IA Chatbot » et ses sous-pages. Toutes exigent `manage_options`.
+	 * Le premier sous-menu reprend le slug du menu parent pour remplacer l'entrée
+	 * automatique de WordPress par « Tableau de bord ».
+	 */
 	public function registerMenus(): void {
 		add_menu_page(
 			__( 'IA Chatbot', 'plugin-wordpress-ia' ),
@@ -123,6 +171,9 @@ class AdminController {
 	}
 
 	/**
+	 * Charge la feuille de style sur les pages du plugin uniquement, et le script
+	 * « valeurs par défaut du fournisseur » sur la seule page Configuration IA.
+	 *
 	 * @param string $hook_suffix Current admin page hook.
 	 */
 	public function enqueueAssets( string $hook_suffix ): void {
@@ -162,6 +213,14 @@ class AdminController {
 		);
 	}
 
+	/* =====================================================================
+	 * 2. Pages d'administration (affichage seul, aucune écriture)
+	 * ===================================================================== */
+
+	/**
+	 * Tableau de bord : statut, fournisseur, compteurs, consommation du jour et
+	 * résultat du dernier test de connexion.
+	 */
 	public function renderDashboard(): void {
 		$this->authorize();
 		global $wpdb;
@@ -171,6 +230,7 @@ class AdminController {
 		$settings      = AdminSettings::get();
 		$usage         = $this->getSiteUsage();
 		$tokens        = null === $usage ? null : $usage['tokens'];
+		// Écrit par saveTestResult(), effacé à chaque enregistrement de la configuration.
 		$test_result   = get_option( 'wpia_api_test_result', array() );
 		if ( ! is_array( $test_result ) ) {
 			$test_result = array();
@@ -230,6 +290,10 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Liste paginée des documents, avec recherche, filtre par statut, formulaire
+	 * de téléversement et gestion de l'ordre des documents du chatbot actif.
+	 */
 	public function renderDocuments(): void {
 		$this->authorize();
 		global $wpdb;
@@ -239,6 +303,7 @@ class AdminController {
 		$page       = max( 1, absint( $this->requestString( $_GET, 'paged' ) ) );
 		$per_page   = 20;
 		$total      = $repository->countSearch( $search, $status );
+		// Ramène une page demandée hors limites sur la dernière page existante.
 		$page       = min( $page, max( 1, (int) ceil( $total / $per_page ) ) );
 		$rows       = $repository->search( $search, $status, $per_page, ( $page - 1 ) * $per_page );
 		$active     = $this->getConfigurationRows();
@@ -247,6 +312,8 @@ class AdminController {
 		if ( $bot_id > 0 ) {
 			$ordered = ( new ChatbotDocumentRepository( $wpdb ) )->getOrderedDocuments( $bot_id );
 		}
+		// document_id => position (à partir de 1) dans le chatbot actif. Un document
+		// absent de cette table n'est pas associé au chatbot.
 		$order_map = array();
 		foreach ( $ordered as $position => $row ) {
 			$order_map[ (int) $row['document_id'] ] = $position + 1;
@@ -301,6 +368,7 @@ class AdminController {
 							<td><?php echo esc_html( $this->documentStatusLabel( (string) $row['statut_indexation'] ) ); ?></td>
 							<td><?php echo isset( $order_map[ (int) $row['id'] ] ) ? esc_html( (string) $order_map[ (int) $row['id'] ] ) : esc_html__( 'Non associé', 'plugin-wordpress-ia' ); ?></td>
 							<td>
+								<?php // Document associé : boutons Monter / Descendre ; sinon : bouton Associer. ?>
 								<?php if ( $bot_id > 0 && isset( $order_map[ (int) $row['id'] ] ) ) : ?>
 									<?php $this->renderMoveForm( (int) $row['id'], 'up' ); ?>
 									<?php $this->renderMoveForm( (int) $row['id'], 'down' ); ?>
@@ -333,6 +401,14 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Formulaire de configuration IA (fournisseur, URL, modèle, instructions,
+	 * limites, clé API) et formulaire séparé du test de connexion.
+	 *
+	 * Le premier formulaire est envoyé à options.php : WordPress appelle alors
+	 * sanitizeAIConfiguration(). La clé API n'est jamais réaffichée : un champ vide
+	 * conserve la clé enregistrée.
+	 */
 	public function renderAIConfiguration(): void {
 		$this->authorize();
 		$configuration = $this->getConfigurationRows();
@@ -401,6 +477,10 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * État du chiffrement : disponibilité d'OpenSSL et des salts, et présence d'une
+	 * ancienne clé API stockée en clair (migrée au prochain enregistrement).
+	 */
 	public function renderSecurity(): void {
 		$this->authorize();
 		$cipher        = new SecretCipher();
@@ -423,11 +503,15 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Journaux paginés (50 par page), filtrables par catégorie.
+	 */
 	public function renderLogs(): void {
 		$this->authorize();
 		global $wpdb;
 		$repository = new LogRepository( $wpdb );
 		$category   = sanitize_key( $this->requestString( $_GET, 'category' ) );
+		// Liste fermée : toute autre valeur revient à « Toutes ».
 		if ( ! in_array( $category, array( '', 'api', 'security', 'document', 'application' ), true ) ) {
 			$category = '';
 		}
@@ -485,6 +569,9 @@ class AdminController {
 	}
 
 	/**
+	 * Consommation du jour pour tout le site. Renvoie null si la lecture échoue,
+	 * pour que les pages affichent « Indisponible » au lieu de planter.
+	 *
 	 * @return array{jour:string,tokens:int,messages:int,limite:int,seuil:int,alerte_envoyee:bool}|null
 	 */
 	private function getSiteUsage(): ?array {
@@ -497,6 +584,9 @@ class AdminController {
 	}
 
 	/**
+	 * Bandeau affiché à partir du seuil d'alerte : avertissement (orange) entre le
+	 * seuil et la limite, erreur (rouge) une fois la limite atteinte. Rien sous le seuil.
+	 *
 	 * @param array{tokens:int,limite:int,seuil:int}|null $usage
 	 */
 	private function renderUsageWarning( ?array $usage ): void {
@@ -521,6 +611,10 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Consommation du jour, date de la dernière alerte e-mail et formulaire des
+	 * limites (champs déclarés par AdminSettings dans la section wpia_alert_settings).
+	 */
 	public function renderAlerts(): void {
 		$this->authorize();
 		?>
@@ -572,11 +666,32 @@ class AdminController {
 		<?php
 	}
 
+	/* =====================================================================
+	 * 3. Enregistrement de la configuration IA
+	 * ===================================================================== */
+
 	/**
+	 * Callback de l'API Settings pour CONFIG_OPTION. Elle ne se contente pas de
+	 * nettoyer : elle valide le formulaire, chiffre la clé API et écrit le
+	 * fournisseur, le compte API et le chatbot dans leurs tables.
+	 *
+	 * La valeur renvoyée est ce que WordPress enregistre dans l'option, c'est-à-dire
+	 * uniquement le type de fournisseur et les trois identifiants. En cas d'erreur,
+	 * on renvoie l'option actuelle inchangée (via configurationOption()) et le
+	 * message est affiché par settings_errors( 'wpia_ai_settings' ).
+	 *
+	 * Étapes :
+	 * 1. contrôle des droits et du fournisseur ;
+	 * 2. lecture des champs, avec repli sur les valeurs enregistrées ;
+	 * 3. validation des longueurs, de l'URL, des tokens et de la température ;
+	 * 4. préparation de la clé API (chiffrement, conservation ou suppression) ;
+	 * 5. écriture des trois lignes dans une seule transaction.
+	 *
 	 * @param mixed $input
 	 * @return array<string, int|string>
 	 */
 	public function sanitizeAIConfiguration( $input ): array {
+		// 1. Droits et fournisseur.
 		$current = get_option( self::CONFIG_OPTION, array() );
 		if ( ! is_array( $current ) ) {
 			$current = array();
@@ -596,6 +711,9 @@ class AdminController {
 			return $this->configurationOption( $current );
 		}
 
+		// 2. Lecture des champs. Un champ vide reprend la valeur enregistrée, mais
+		// seulement si le fournisseur n'a pas changé : l'URL ou le modèle d'OpenAI
+		// n'ont pas de sens pour Anthropic. Sinon, on prend la valeur du catalogue.
 		$current_rows = $this->getConfigurationRows();
 		$same_provider = $type === $this->getProviderType();
 		$url_input    = $this->arrayString( $input, 'url_api' );
@@ -615,9 +733,13 @@ class AdminController {
 		$temp_input = $this->arrayString( $input, 'temperature' );
 		$max        = '' !== $max_input ? filter_var( $max_input, FILTER_VALIDATE_INT ) : ( $same_provider && ! empty( $current_rows['chatbot']['max_tokens'] ) ? (int) $current_rows['chatbot']['max_tokens'] : 1024 );
 		$temp       = '' !== $temp_input ? filter_var( $temp_input, FILTER_VALIDATE_FLOAT ) : ( $same_provider && isset( $current_rows['chatbot']['temperature'] ) ? (float) $current_rows['chatbot']['temperature'] : 0.3 );
+		// Clé API : un champ vide signifie « conserver la clé actuelle », pas « l'effacer ».
+		// L'effacement passe par la case à cocher clear_api_key.
 		$new_key    = trim( $this->arrayString( $input, 'api_key' ) );
 		$clear_key  = '1' === $this->arrayString( $input, 'clear_api_key' );
 
+		// 3. Validation. filter_var() renvoie false pour une saisie non numérique.
+		// Les longueurs maximales bornent ce qui est stocké en base et envoyé au fournisseur.
 		if ( strlen( $url ) > 2048 || strlen( $model ) > 191 || strlen( $prompt ) > 50000 || strlen( $new_key ) > 4096 || ! $this->validProviderUrl( $type, $url ) || '' === $model || false === $max || $max < 1 || $max > 128000 || false === $temp || $temp < 0 || $temp > 2 ) {
 			add_settings_error( 'wpia_ai_settings', 'wpia_invalid_ai_settings', __( 'Vérifiez l’URL, le modèle, les limites et la température. Le modèle et les instructions doivent respecter les longueurs maximales.', 'plugin-wordpress-ia' ), 'error' );
 			return $this->configurationOption( $current );
@@ -631,12 +753,23 @@ class AdminController {
 		$old_account = ! empty( $ids['account_id'] ) ? $accounts->getById( (int) $ids['account_id'] ) : null;
 		$cipher      = new SecretCipher();
 
+		// 4. Clé API. On refuse d'aller plus loin si le chiffrement est indisponible
+		// alors qu'il faudrait chiffrer : une nouvelle clé, ou une ancienne clé
+		// stockée en clair à migrer. Une clé ne doit jamais être écrite en clair.
 		if ( ( '' !== $new_key || ( ! $clear_key && is_array( $old_account ) && ! empty( $old_account['api_key'] ) && ! $cipher->isEncrypted( (string) $old_account['api_key'] ) ) ) && ! $cipher->isAvailable() ) {
 			add_settings_error( 'wpia_ai_settings', 'wpia_encryption_unavailable', __( 'Le chiffrement n’est pas disponible ; la clé API n’a pas été enregistrée.', 'plugin-wordpress-ia' ), 'error' );
 			return $this->configurationOption( $current );
 		}
 
 		try {
+			// Valeur finale de la clé :
+			// - case « supprimer » cochée : chaîne vide ;
+			// - nouvelle clé saisie : elle est chiffrée ;
+			// - sinon, même fournisseur : l'ancienne clé est conservée, et rechiffrée
+			//   si elle date d'avant le chiffrement (decrypt() rend telle quelle une
+			//   valeur en clair) ;
+			// - changement de fournisseur sans nouvelle clé : chaîne vide, car la clé
+			//   d'un autre fournisseur ne servirait à rien.
 			$stored_key = '';
 			if ( ! $clear_key ) {
 				if ( '' !== $new_key ) {
@@ -647,6 +780,8 @@ class AdminController {
 				}
 			}
 
+			// 5. Écriture. Les trois lignes dépendent les unes des autres (chatbot →
+			// compte API → fournisseur) : soit tout est enregistré, soit rien.
 			if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
 				throw new RuntimeException( 'Unable to start the AI configuration transaction.' );
 			}
@@ -692,6 +827,7 @@ class AdminController {
 			return $this->configurationOption( $current );
 		}
 
+		// Le dernier test de connexion ne vaut plus pour la nouvelle configuration.
 		delete_option( 'wpia_api_test_result' );
 		add_settings_error( 'wpia_ai_settings', 'wpia_settings_saved', __( 'Configuration enregistrée.', 'plugin-wordpress-ia' ), 'success' );
 
@@ -703,11 +839,21 @@ class AdminController {
 		);
 	}
 
+	/* =====================================================================
+	 * 4. Actions admin-post (formulaires POST, terminées par redirect())
+	 * ===================================================================== */
+
+	/**
+	 * Teste la connexion au fournisseur en listant ses modèles. Aucune génération
+	 * n'est demandée, donc aucun token n'est consommé. Le résultat est mémorisé
+	 * (saveTestResult()) pour être affiché sur le tableau de bord.
+	 */
 	public function testAIConnection(): void {
 		$this->authorize();
 		check_admin_referer( 'wpia_test_ai' );
 		$rows = $this->getConfigurationRows();
 
+		// Ollama tourne en local et ne demande pas de clé API.
 		if ( empty( $rows['provider']['url_api'] ) || empty( $rows['chatbot']['modele'] ) || ! is_array( $rows['account'] ) || ( 'ollama' !== $this->getProviderType() && empty( $rows['account']['api_key'] ) ) ) {
 			$this->saveTestResult( false, __( 'Configuration incomplète : fournisseur, modèle et clé API sont requis.', 'plugin-wordpress-ia' ) );
 			$this->redirect( self::PAGE_AI, 'test_failed' );
@@ -715,10 +861,13 @@ class AdminController {
 
 		$type = $this->getProviderType();
 		try {
+			// La clé n'est déchiffrée qu'ici, au moment de l'appel, et n'est jamais journalisée.
 			$key      = ( new SecretCipher() )->decrypt( (string) $rows['account']['api_key'] );
 			$settings = AdminSettings::get();
 			$result   = $this->performConnectionTest( $type, (string) $rows['provider']['url_api'], $key, (int) $settings['api_timeout'] );
 			if ( is_wp_error( $result ) ) {
+				// Erreur réseau (DNS, délai, URL refusée…). Seul le code d'erreur est
+				// journalisé : le message de WordPress pourrait contenir l'URL complète.
 				$message = __( 'Le fournisseur n’a pas répondu au test. Vérifiez l’URL, la clé et les journaux.', 'plugin-wordpress-ia' );
 				$this->saveTestResult( false, $message );
 				$this->log( 'error', 'api', $message . ' Error code: ' . sanitize_key( $result->get_error_code() ) );
@@ -747,12 +896,22 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Téléverse un document Markdown : DocumentStorage le valide et l'écrit chiffré
+	 * sur le disque, puis la ligne wpia_document est créée et le document est ajouté
+	 * en fin de liste du chatbot actif.
+	 *
+	 * Le fichier est écrit avant la transaction : si l'enregistrement en base échoue,
+	 * il est supprimé pour ne pas laisser de fichier orphelin.
+	 */
 	public function uploadDocument(): void {
 		$this->authorize();
 		check_admin_referer( 'wpia_upload_document' );
 
 		try {
 			$file = isset( $_FILES['wpia_markdown'] ) && is_array( $_FILES['wpia_markdown'] ) ? $_FILES['wpia_markdown'] : array();
+			// Vérifie la forme du tableau $_FILES. Le contenu (extension, taille,
+			// encodage) est contrôlé par DocumentStorage::storeUpload().
 			if ( ! isset( $file['name'], $file['tmp_name'], $file['size'], $file['error'] ) || ! is_string( $file['name'] ) || ! is_string( $file['tmp_name'] ) || ! is_numeric( $file['size'] ) || ! is_numeric( $file['error'] ) ) {
 				throw new RuntimeException( 'The uploaded document is invalid.' );
 			}
@@ -769,6 +928,8 @@ class AdminController {
 				if ( '' === $designation ) {
 					$designation = __( 'Document Markdown', 'plugin-wordpress-ia' );
 				}
+				// taille_tokens : estimation provisoire (octets / 4), qui surestime les
+				// textes accentués. Elle sera remplacée par TokenEstimator (issue 006).
 				$id = $repository->create(
 					array(
 						'designation'       => $designation,
@@ -805,9 +966,19 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Supprime un document : le fichier chiffré, ses liens avec les chatbots, puis
+	 * sa ligne wpia_document.
+	 *
+	 * Attention : ces étapes ne sont pas dans une transaction et le fichier est
+	 * supprimé en premier. Si l'une des suppressions en base échoue, la ligne reste
+	 * en base mais son fichier n'existe plus.
+	 */
 	public function deleteDocument(): void {
 		$this->authorize();
 		$id = absint( $this->requestString( $_POST, 'document_id' ) );
+		// Le nonce inclut l'identifiant : un nonce valable pour un document ne permet
+		// pas d'en supprimer un autre. Même principe pour les actions suivantes.
 		check_admin_referer( 'wpia_delete_document_' . $id );
 		if ( $id < 1 ) {
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_not_found' );
@@ -833,6 +1004,11 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * « Réindexer » : relit et déchiffre le fichier, puis recalcule son hash et ses
+	 * tailles. Il n'y a pas encore de découpage en sections (issue 006, lot A) : un
+	 * succès confirme seulement que le fichier est lisible.
+	 */
 	public function reindexDocument(): void {
 		$this->authorize();
 		$id = absint( $this->requestString( $_POST, 'document_id' ) );
@@ -866,6 +1042,10 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Monte ou descend un document d'une position dans l'ordre du chatbot actif.
+	 * L'ordre décide de la priorité des documents dans le contexte envoyé à l'IA.
+	 */
 	public function moveDocument(): void {
 		$this->authorize();
 		$id        = absint( $this->requestString( $_POST, 'document_id' ) );
@@ -890,6 +1070,9 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Associe un document actif, pas encore lié, au chatbot actif, en fin de liste.
+	 */
 	public function assignDocument(): void {
 		$this->authorize();
 		$id = absint( $this->requestString( $_POST, 'document_id' ) );
@@ -914,6 +1097,10 @@ class AdminController {
 		}
 	}
 
+	/**
+	 * Supprime une entrée de journal. Un identifiant inconnu (0 ligne supprimée)
+	 * est signalé comme « introuvable ».
+	 */
 	public function deleteLog(): void {
 		$this->authorize();
 		$id = absint( $this->requestString( $_POST, 'log_id' ) );
@@ -934,6 +1121,14 @@ class AdminController {
 		$this->redirect( self::PAGE_LOGS, 'log_deleted' );
 	}
 
+	/* =====================================================================
+	 * 5. Utilitaires privés
+	 * ===================================================================== */
+
+	/**
+	 * Arrête la requête si l'utilisateur n'a pas `manage_options`. À appeler en
+	 * premier dans chaque page et chaque action : un nonce ne vérifie pas les droits.
+	 */
 	private function authorize(): void {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			$this->log( 'warning', 'security', 'An administration request was denied because the user lacks the required capability.' );
@@ -942,6 +1137,9 @@ class AdminController {
 	}
 
 	/**
+	 * Identifiants de la configuration active, lus dans CONFIG_OPTION. Une valeur
+	 * absente vaut 0, ce qui signifie « pas encore configuré ».
+	 *
 	 * @return array<string, int>
 	 */
 	private function getConfigurationIds(): array {
@@ -957,6 +1155,11 @@ class AdminController {
 		);
 	}
 
+	/**
+	 * Type du fournisseur actif (clé de AIProviderCatalog). Si CONFIG_OPTION ne le
+	 * contient pas, on lit l'ancienne option `wpia_provider_type`, conservée pour
+	 * les installations antérieures. Un type inconnu retombe sur `openai`.
+	 */
 	private function getProviderType(): string {
 		$configuration = get_option( self::CONFIG_OPTION, array() );
 		$type          = is_array( $configuration ) && isset( $configuration['provider_type'] ) && is_string( $configuration['provider_type'] )
@@ -967,6 +1170,10 @@ class AdminController {
 	}
 
 	/**
+	 * Lit une valeur texte du formulaire de configuration, sans slashes ajoutés par
+	 * WordPress. Une clé absente ou non textuelle (tableau injecté…) donne ''.
+	 * Le nettoyage (sanitize_*) reste à faire par l'appelant.
+	 *
 	 * @param array<string, mixed> $input
 	 */
 	private function arrayString( array $input, string $key ): string {
@@ -978,6 +1185,9 @@ class AdminController {
 	}
 
 	/**
+	 * Valeur à renvoyer à l'API Settings quand l'enregistrement est refusé :
+	 * l'option actuelle, ramenée à sa forme attendue. L'option reste ainsi inchangée.
+	 *
 	 * @param array<string, mixed> $current
 	 * @return array<string, int|string>
 	 */
@@ -991,6 +1201,10 @@ class AdminController {
 	}
 
 	/**
+	 * Lignes complètes de la configuration active : clés `provider`, `account` et
+	 * `chatbot`, chacune à null si elle n'existe pas. La clé API de `account` est
+	 * celle stockée, donc chiffrée.
+	 *
 	 * @return array<string, array<string, mixed>|null>
 	 */
 	private function getConfigurationRows(): array {
@@ -1008,6 +1222,10 @@ class AdminController {
 	}
 
 	/**
+	 * Met à jour la ligne $id si elle existe encore, sinon en crée une. Renvoie
+	 * l'identifiant final. Couvre le cas où une ligne a été supprimée alors que
+	 * CONFIG_OPTION pointe toujours vers elle.
+	 *
 	 * @param array<string, scalar> $data
 	 */
 	private function saveEntity( object $repository, int $id, array $data ): int {
@@ -1019,6 +1237,12 @@ class AdminController {
 		return $repository->create( $data );
 	}
 
+	/**
+	 * Règles d'URL du fournisseur :
+	 * - jamais d'identifiants, de paramètres ni d'ancre dans l'URL ;
+	 * - Ollama : `http` autorisé, mais uniquement vers la machine locale ;
+	 * - autres fournisseurs : `https` obligatoire, pour ne jamais envoyer la clé en clair.
+	 */
 	private function validProviderUrl( string $type, string $url ): bool {
 		$parts = wp_parse_url( $url );
 		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) || isset( $parts['user'] ) || isset( $parts['pass'] ) || isset( $parts['query'] ) || isset( $parts['fragment'] ) ) {
@@ -1034,6 +1258,14 @@ class AdminController {
 	}
 
 	/**
+	 * Appelle le point de terminaison qui liste les modèles (`/api/tags` pour Ollama,
+	 * `/models` pour les autres), avec l'en-tête d'authentification propre au fournisseur.
+	 *
+	 * Ollama passe par wp_remote_get() parce que wp_safe_remote_get() refuse
+	 * `localhost`. Les autres passent par wp_safe_remote_get(), qui bloque les
+	 * adresses internes (protection SSRF). Les redirections sont désactivées, et la
+	 * réponse est limitée à 64 Ko et le délai à 120 s.
+	 *
 	 * @return array|\WP_Error
 	 */
 	private function performConnectionTest( string $type, string $base_url, string $api_key, int $timeout ) {
@@ -1060,6 +1292,10 @@ class AdminController {
 			: wp_safe_remote_get( $url, $args );
 	}
 
+	/**
+	 * Mémorise le résultat du dernier test de connexion, affiché sur le tableau de
+	 * bord et la page Configuration IA. Option non chargée automatiquement (`false`).
+	 */
 	private function saveTestResult( bool $success, string $message ): void {
 		update_option(
 			'wpia_api_test_result',
@@ -1072,11 +1308,19 @@ class AdminController {
 		);
 	}
 
+	/**
+	 * Ajoute une entrée à wpia_log. Ne jamais y passer de clé API ni le contenu
+	 * d'un document.
+	 */
 	private function log( string $level, string $category, string $message ): void {
 		global $wpdb;
 		( new LogRepository( $wpdb ) )->create( $level, $category, $message );
 	}
 
+	/**
+	 * Redirige vers une page du plugin avec un code de message (voir renderNotice()),
+	 * puis arrête le script. Le code qui suit un appel n'est jamais exécuté.
+	 */
 	private function redirect( string $page, string $notice ): void {
 		wp_safe_redirect(
 			add_query_arg(
@@ -1090,6 +1334,11 @@ class AdminController {
 		exit;
 	}
 
+	/**
+	 * Affiche le message correspondant au paramètre `wpia_notice` de l'URL. Seuls
+	 * les codes de cette liste fermée produisent un message, avec un texte fixe :
+	 * l'URL ne permet donc pas d'injecter de contenu.
+	 */
 	private function renderNotice(): void {
 		$notice = sanitize_key( $this->requestString( $_GET, 'wpia_notice' ) );
 		$messages = array(
@@ -1121,6 +1370,14 @@ class AdminController {
 		}
 	}
 
+	/*
+	 * Petits formulaires POST d'une ligne de tableau. Chacun porte son nonce lié à
+	 * l'identifiant, vérifié par l'action correspondante.
+	 */
+
+	/**
+	 * Bouton d'action générique sur un document (réindexer, supprimer).
+	 */
 	private function renderDocumentAction( string $action, int $id, string $label ): void {
 		?>
 		<form class="wpia-inline-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -1134,6 +1391,9 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Bouton « Monter » (`up`) ou « Descendre » (`down`).
+	 */
 	private function renderMoveForm( int $id, string $direction ): void {
 		$label = 'up' === $direction ? __( 'Monter', 'plugin-wordpress-ia' ) : __( 'Descendre', 'plugin-wordpress-ia' );
 		?>
@@ -1147,6 +1407,9 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Bouton « Associer au chatbot ».
+	 */
 	private function renderAssignForm( int $id ): void {
 		?>
 		<form class="wpia-inline-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -1158,6 +1421,9 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Bouton « Supprimer » d'une entrée de journal.
+	 */
 	private function renderLogDeleteForm( int $id ): void {
 		?>
 		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
@@ -1169,6 +1435,9 @@ class AdminController {
 		<?php
 	}
 
+	/**
+	 * Libellé traduit d'un statut d'indexation (`pending`, `ready`, `error`).
+	 */
 	private function documentStatusLabel( string $status ): string {
 		$labels = array(
 			'pending' => __( 'En attente', 'plugin-wordpress-ia' ),
@@ -1180,6 +1449,9 @@ class AdminController {
 	}
 
 	/**
+	 * Lit une valeur texte de $_GET ou $_POST, sans slashes. Même rôle que
+	 * arrayString() : le nettoyage reste à faire par l'appelant.
+	 *
 	 * @param array<string, mixed> $source
 	 */
 	private function requestString( array $source, string $key ): string {
