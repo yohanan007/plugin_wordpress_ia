@@ -16,7 +16,8 @@ Les noms de fichiers, les titres internes et les numéros GitHub ne suivent pas 
 | [006-markdown.md](006-markdown.md) | Assemblage de la requête IA : prompts, Markdown de contexte et Markdown complet. **Lot A** : indexation des documents ; **lot B** : assemblage | à créer | `9-exploiter-les-documents-markdown-comme-contexte` | **En cours** : spécification révisée le 2026-11-15 ; lot A prêt à démarrer, lot B après 008 et 009 lot A |
 | [007-chat-publique.md](007-chat-publique.md) | Chat public (shortcode et REST) | à créer | — | À faire |
 | [008-generation-multitours.md](008-generation-multitours.md) | Génération multi-tours (historique, prompt système `{stable, variable}`, cache, chatbot) | à créer | — | Nouvelle, **prérequis** de 006 (lot B), 007 et 009 (lot B) |
-| [009-cadrage-garde-fous.md](009-cadrage-garde-fous.md) | Cadrage du sujet, garde-fous (blocs [1] et [2] du prompt), consignes de l'admin, jeu d'évaluation. **Lot A** : cadrage et `PromptBuilder` ; **lot B** : contrôle de sortie et évaluation | à créer | — | Spécification révisée le 2026-11-17 ; lot A prêt à démarrer, lot B après 008 et 006 lot B |
+| [009-cadrage-garde-fous.md](009-cadrage-garde-fous.md) | Cadrage du sujet, garde-fous (blocs [1] et [2] du prompt), consignes de l'admin, jeu d'évaluation. **Lot A** : cadrage et `PromptBuilder` ; **lot B** : contrôle de sortie et évaluation | à créer | — | **Partie 1 faite le 2026-11-18** (`TokenEstimator`, `CadrageValidator`, `PromptBuilder`) ; suite dans 009-2 |
+| [009-cadrage-garde-fous-2.md](009-cadrage-garde-fous-2.md) | Partie 2 de 009 : migration, section d'administration, documentation (**lot A**) ; branchement, contrôle de sortie et évaluation (**lot B**) | à créer | — | Créée le 2026-11-18 ; lot A prêt, lot B après 008 et 006 lot B |
 | [010-rgpd-desinstallation.md](010-rgpd-desinstallation.md) | RGPD, `uninstall.php`, clé de chiffrement | à créer | — | Nouvelle |
 | [011-cache-reponses.md](011-cache-reponses.md) | Cache des réponses fréquentes | à créer | — | Nouvelle, priorité basse |
 
@@ -26,10 +27,10 @@ Les noms de fichiers, les titres internes et les numéros GitHub ne suivent pas 
 
 ```
 006 lot A Indexation (aucune dépendance) ──────┐
-009 lot A Cadrage, PromptBuilder (aucune) ─────┤
+009 partie 1 faite ; 009-2 lot A Migration, admin (aucune) ─┤
                                                │
 #11 Limites (005) ─┐                           │
-                   ├─► 008 Multi-tours ────────┴─► 006 lot B Assemblage ─► 009 lot B Contrôle de sortie ─► 007 Chat public  ══ MVP
+                   ├─► 008 Multi-tours ────────┴─► 006 lot B Assemblage ─► 009-2 lot B Contrôle de sortie ─► 007 Chat public  ══ MVP
                    │                                                         et évaluation
                    │
                    └─────────────────────────────────────────► 010 RGPD / désinstallation

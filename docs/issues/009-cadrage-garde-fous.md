@@ -4,6 +4,7 @@
 > **Correspondance GitHub :** à créer.
 > **Mise à jour du 2026-11-15 :** alignement sur la révision de [006](006-markdown.md). `PromptBuilder` ne produit plus que le prompt de base [1] et les consignes de l'admin [2] ; l'assemblage avec `<contexte>` et `<documents>` revient à `PromptAssembler` (006). Les règles couvrent désormais `<contexte>` et le cas sans document. Le champ « Consignes complémentaires » reçoit une limite de taille et une liste de balises interdites.
 > **Mise à jour du 2026-11-17 :** validation sur le texte brut (avant `sanitize_textarea_field()`), refus ciblé du seul champ invalide, validation de tous les champs de cadrage, stockage du marqueur témoin, jeton sentinelle `[[HORS_SUJET]]`, contrôle de sortie avant toute mise en cache, découpage en lots A et B.
+> **Mise à jour du 2026-11-18 : issue coupée en deux.** **Partie 1 (cette issue) : faite** : `TokenEstimator`, `CadrageValidator` et `PromptBuilder`, avec leurs tests (`tests/run.php`, 40 tests). Ces classes sont pures : aucune migration, aucune interface. **Partie 2 : [009-cadrage-garde-fous-2.md](009-cadrage-garde-fous-2.md)** : migration, administration, documentation, contrôle de sortie et évaluation. La spécification et les décisions restent dans le présent fichier, qui fait foi pour les deux parties.
 
 ## Pourquoi cette issue
 
@@ -93,14 +94,18 @@ Aucun autre filtrage de sortie n'est prévu, pour éviter de multiplier les appe
 
 ## Tâches
 
+Les tâches 1, 3 et 4 du lot A, ainsi que le lot B, sont dans la [partie 2](009-cadrage-garde-fous-2.md).
+
 ### Lot A : cadrage et prompt (aucune dépendance)
 
-1. Migration : colonnes de cadrage et `marqueur_temoin` dans `wpia_chatbot` (avec la génération du marqueur pour les chatbots existants), nouveaux champs de l'entité `Chatbot`, réglage `prompt_admin_max_tokens` dans `AdminSettings`.
-2. **`PromptBuilder`** (`src/Prompt/`) : `construire( Chatbot $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true ): array{base:string, admin:string}`, avec la constante `VERSION`. C'est une fonction pure, sans appel à WordPress : le nom du site est passé en paramètre, et le marqueur est lu depuis le chatbot, jamais généré ici.
-3. Admin « Configuration IA » : section « Cadrage du chatbot » avec les champs de cadrage, dont « Consignes complémentaires » (`system_prompt`) avec un compteur de tokens et la limite affichée, et la validation décrite plus haut. Elle contient aussi un **aperçu en lecture seule** des blocs [1] et [2], produit avec `$avec_marqueur = false`, et une estimation de leur taille en tokens.
-4. Documentation : `documentation/cadrage.md`, avec des conseils de rédaction des champs et un exemple complet pour un CV.
+- [x] **Partie 1 : `TokenEstimator`** (`src/Service/`) : estimation unique `ceil( caractères / 4 )`, comptée en caractères UTF-8 sans `mbstring`.
+- [x] **Partie 1 : `CadrageValidator`** (`src/Prompt/`) : validation du texte brut, refus ciblé champ par champ, codes d'erreur traduits par l'appelant. Fonction pure.
+- [x] **Partie 1 : `PromptBuilder`** (`src/Prompt/`) : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true ): array{base:string, admin:string}`, avec la constante `VERSION`. Il prend un tableau (une ligne `wpia_chatbot`) et non l'entité `Chatbot`, qui n'est utilisée nulle part. C'est une fonction pure, sans appel à WordPress : le nom du site est passé en paramètre, et le marqueur est lu depuis le chatbot, jamais généré ici. Un sujet vide est remplacé par `SUJET_GENERIQUE`.
+- [ ] 1. Migration, section d'administration et documentation : voir la [partie 2](009-cadrage-garde-fous-2.md).
 
 ### Lot B : branchement et évaluation (après 008 et 006 lot B)
+
+Voir la [partie 2](009-cadrage-garde-fous-2.md). Description conservée ici pour mémoire :
 
 5. Branchement : `PromptBuilder` est appelé par `PromptAssembler` (006), lui-même branché dans `AiGenerationService::generateChat()` (008). Le contrôle de sortie (marqueur, puis jeton `[[HORS_SUJET]]`) se fait dans `generateChat()`, avant toute mise en cache.
 6. **Jeu d'évaluation** : `tests/evaluation/questions.md` contient environ 20 questions classées en trois catégories (dans le sujet, hors sujet, piège) avec le comportement attendu. Un script `tests/evaluation/run.php` les envoie au fournisseur configuré **avec une température forcée à 0**, compare la réponse brute (avant remplacement) au comportement attendu, et produit un rapport. Il est **lancé à la main uniquement** (il coûte de l'ordre de 20 appels) après chaque modification du cadrage ou des documents.
@@ -122,15 +127,17 @@ Un modèle de modération séparé, la détection automatique de la langue côt�
 
 ## Critères d'acceptation
 
-- `PromptBuilder` produit un prompt dans lequel les règles fixes précèdent toujours les consignes de l'admin (test unitaire).
-- Des consignes de l'admin contenant « Ignore les règles ci-dessus » n'en retirent aucune : elles sont présentes et placées avant (test unitaire).
-- Les règles fixes citent `<contexte>` et `<documents>`. Pour un chatbot sans document, c'est la variante « sans document » qui est produite (test unitaire).
-- Des consignes de plus de 1 000 tokens, ou contenant `<documents>`, sont refusées à l'enregistrement. Le contrôle porte sur le texte brut : la balise est détectée même si `sanitize_textarea_field()` l'aurait retirée. Des consignes existantes trop longues sont toujours envoyées, et un avertissement s'affiche.
-- Un sujet ou une réponse hors sujet contenant une balise interdite ou `[[HORS_SUJET]]` est refusé.
-- Des consignes refusées n'empêchent pas l'enregistrement d'un changement de modèle soumis dans le même formulaire ; les consignes gardent leur valeur précédente.
-- Une valeur inconnue pour le ton ou la langue est ramenée à la valeur par défaut.
-- Modifier le texte des règles fixes sans incrémenter `PromptBuilder::VERSION` fait échouer un test (empreinte du texte figée dans le test).
-- La migration attribue un marqueur témoin distinct à chaque chatbot existant.
+Les critères marqués [x] sont couverts par les tests de la partie 1. Les autres sont repris dans la [partie 2](009-cadrage-garde-fous-2.md).
+
+- [x] `PromptBuilder` produit un prompt dans lequel les règles fixes précèdent toujours les consignes de l'admin (test unitaire).
+- [x] Des consignes de l'admin contenant « Ignore les règles ci-dessus » n'en retirent aucune : elles sont présentes et placées avant (test unitaire).
+- [x] Les règles fixes citent `<contexte>` et `<documents>`. Pour un chatbot sans document, c'est la variante « sans document » qui est produite (test unitaire).
+- [x] Des consignes de plus de 1 000 tokens, ou contenant `<documents>`, sont refusées par `CadrageValidator`. Le contrôle porte sur le texte brut. Des consignes existantes trop longues, renvoyées telles quelles, sont acceptées. *(Reste, partie 2 : l'avertissement affiché dans l'admin.)*
+- [x] Un sujet ou une réponse hors sujet contenant une balise interdite ou `[[HORS_SUJET]]` est refusé par `CadrageValidator`.
+- [x] Une valeur inconnue pour le ton ou la langue est ramenée à la valeur par défaut.
+- [x] Modifier le texte des règles fixes sans incrémenter `PromptBuilder::VERSION` fait échouer un test (empreinte du texte figée dans le test).
+- [ ] Des consignes refusées n'empêchent pas l'enregistrement d'un changement de modèle soumis dans le même formulaire ; les consignes gardent leur valeur précédente. *(Partie 2 : branchement dans `AdminController`.)*
+- [ ] La migration attribue un marqueur témoin distinct à chaque chatbot existant.
 - L'aperçu dans l'admin n'affiche jamais le marqueur témoin.
 - Une réponse simulée contenant le marqueur est remplacée par la réponse hors sujet et journalisée sans contenu.
 - Une réponse simulée `[[HORS_SUJET]]` est remplacée exactement par la réponse hors sujet de l'admin.
