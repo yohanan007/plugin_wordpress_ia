@@ -14,7 +14,8 @@ Sur un chat de CV, une grande partie des échanges commence par les **questions 
 | Sujet | Décision |
 |---|---|
 | Quoi | Uniquement les requêtes **sans historique** : une réponse qui dépend de l'historique n'est pas réutilisable. |
-| Clé | `wpia_rep_` + `sha256( chatbot_id \| version du contexte (006) \| version du cadrage (009) \| modèle \| question normalisée )`. La normalisation passe en minuscules, retire les accents, la ponctuation et les espaces multiples. |
+| Clé | `wpia_rep_` + `sha256( chatbot_id \| version du contexte (006) \| modèle \| question normalisée )`. La version du contexte inclut déjà `PromptBuilder::VERSION` et le hash des champs de cadrage (009). La normalisation passe en minuscules, retire les accents, la ponctuation et les espaces multiples. |
+| Réponses exclues | Une réponse remplacée par le contrôle de sortie (009 : marqueur témoin ou jeton `[[HORS_SUJET]]`) n'est **jamais** mise en cache. |
 | Stockage | Transients (donc l'object cache s'il est présent). Durée réglable (`response_cache_ttl`, **24 h** par défaut, 0 pour désactiver). La réponse en cache est le HTML **déjà nettoyé** par `wp_kses` (007). |
 | Invalidation | Elle découle de la clé : un changement de document, de cadrage ou de modèle change la clé. Un bouton « Vider le cache » est ajouté dans l'admin. |
 | Limites | Un succès du cache compte **1 message** pour le visiteur (anti-abus), mais **0 token** pour le budget site. |
@@ -34,3 +35,4 @@ Sur un chat de CV, une grande partie des échanges commence par les **questions 
 - Après la réindexation d'un document, la même question appelle de nouveau le fournisseur.
 - Un succès du cache n'augmente pas le compteur de tokens du site.
 - Avec `response_cache_ttl` = 0, aucun transient `wpia_rep_*` n'est créé.
+- Une réponse simulée contenant le marqueur témoin ou `[[HORS_SUJET]]` ne crée aucun transient `wpia_rep_*`.
