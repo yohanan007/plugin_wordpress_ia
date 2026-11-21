@@ -1,8 +1,6 @@
 <?php
 
-namespace WPIA\Prompt;
-
-use WPIA\Service\TokenEstimator;
+namespace WPIA\Service\Prompt;
 
 /**
  * Valide les champs de cadrage d'un chatbot (issue 009).

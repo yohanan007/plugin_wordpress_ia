@@ -1,6 +1,6 @@
 <?php
 
-namespace WPIA\Service;
+namespace WPIA\Service\Prompt;
 
 /**
  * Estimation unique du nombre de tokens d'un texte (issue 006) :

@@ -1,6 +1,6 @@
 <?php
 
-namespace WPIA\Service;
+namespace WPIA\Service\Ia;
 
 class AIProviderCatalog {
 	/**

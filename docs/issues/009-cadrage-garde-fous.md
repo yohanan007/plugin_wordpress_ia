@@ -98,9 +98,9 @@ Les tâches 1, 3 et 4 du lot A, ainsi que le lot B, sont dans la [partie 2](009-
 
 ### Lot A : cadrage et prompt (aucune dépendance)
 
-- [x] **Partie 1 : `TokenEstimator`** (`src/Service/`) : estimation unique `ceil( caractères / 4 )`, comptée en caractères UTF-8 sans `mbstring`.
-- [x] **Partie 1 : `CadrageValidator`** (`src/Prompt/`) : validation du texte brut, refus ciblé champ par champ, codes d'erreur traduits par l'appelant. Fonction pure.
-- [x] **Partie 1 : `PromptBuilder`** (`src/Prompt/`) : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true ): array{base:string, admin:string}`, avec la constante `VERSION`. Il prend un tableau (une ligne `wpia_chatbot`) et non l'entité `Chatbot`, qui n'est utilisée nulle part. C'est une fonction pure, sans appel à WordPress : le nom du site est passé en paramètre, et le marqueur est lu depuis le chatbot, jamais généré ici. Un sujet vide est remplacé par `SUJET_GENERIQUE`.
+- [x] **Partie 1 : `TokenEstimator`** (`src/Service/Prompt/`) : estimation unique `ceil( caractères / 4 )`, comptée en caractères UTF-8 sans `mbstring`.
+- [x] **Partie 1 : `CadrageValidator`** (`src/Service/Prompt/`) : validation du texte brut, refus ciblé champ par champ, codes d'erreur traduits par l'appelant. Fonction pure.
+- [x] **Partie 1 : `PromptBuilder`** (`src/Service/Prompt/`) : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true ): array{base:string, admin:string}`, avec la constante `VERSION`. Il prend un tableau (une ligne `wpia_chatbot`) et non l'entité `Chatbot`, qui n'est utilisée nulle part. C'est une fonction pure, sans appel à WordPress : le nom du site est passé en paramètre, et le marqueur est lu depuis le chatbot, jamais généré ici. Un sujet vide est remplacé par `SUJET_GENERIQUE`.
 - [ ] 1. Migration, section d'administration et documentation : voir la [partie 2](009-cadrage-garde-fous-2.md).
 
 ### Lot B : branchement et évaluation (après 008 et 006 lot B)

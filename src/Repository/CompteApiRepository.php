@@ -2,7 +2,7 @@
 
 namespace WPIA\Repository;
 
-use WPIA\Service\SecretCipher;
+use WPIA\Service\Securite\SecretCipher;
 
 class CompteApiRepository extends AbstractRepository {
 	protected string $table_suffix = 'compte_api';

@@ -15,6 +15,7 @@ class DatabaseInstaller {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
 		$this->migrateUsageTable( $wpdb );
+		$previous_version = (string) get_option( 'wpia_db_version', '0.0.0' );
 
 		$charset_collate = $wpdb->get_charset_collate();
 		$tables          = $this->getTableDefinitions( $wpdb->prefix, $charset_collate );
@@ -26,7 +27,32 @@ class DatabaseInstaller {
 			}
 		}
 
+		$this->migrateDocumentsToPending( $wpdb, $previous_version );
+
 		update_option( 'wpia_db_version', WPIA_DB_VERSION );
+	}
+
+	/**
+	 * Migration 1.3.0 (issue 006) : les documents importés avant l'indexation par
+	 * sections n'ont pas de sections. Ils repassent en « pending » jusqu'à leur
+	 * réindexation ; la page « Documents » invite l'administrateur à le faire.
+	 * Sans effet sur une installation déjà en 1.3.0 ou plus.
+	 */
+	private function migrateDocumentsToPending( \wpdb $wpdb, string $previous_version ): void {
+		if ( version_compare( $previous_version, '1.3.0', '>=' ) ) {
+			return;
+		}
+
+		$result = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE ' . $wpdb->prefix . 'wpia_document SET statut_indexation = %s WHERE statut_indexation = %s',
+				'pending',
+				'ready'
+			)
+		);
+		if ( false === $result ) {
+			throw new RuntimeException( 'Unable to flag existing documents for indexing: ' . $wpdb->last_error );
+		}
 	}
 
 	/**
@@ -117,6 +143,17 @@ class DatabaseInstaller {
 				PRIMARY KEY  (id),
 				UNIQUE KEY chatbot_document (chatbot_id,document_id),
 				KEY document_id (document_id)
+			) {$charset_collate};",
+			'document_section'    => "CREATE TABLE {$prefix}wpia_document_section (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				document_id bigint(20) unsigned NOT NULL,
+				ordre int(10) unsigned NOT NULL DEFAULT 0,
+				titre varchar(191) NOT NULL,
+				contenu longtext NOT NULL,
+				tokens int(10) unsigned NOT NULL DEFAULT 0,
+				mots_cles longtext NOT NULL,
+				PRIMARY KEY  (id),
+				KEY document_ordre (document_id,ordre)
 			) {$charset_collate};",
 			'conversation'        => "CREATE TABLE {$prefix}wpia_conversation (
 				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,

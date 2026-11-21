@@ -2,12 +2,12 @@
 
 ## Utilisation
 
-La génération passe par `WPIA\Service\AiGenerationService`. Le service lit la
+La génération passe par `WPIA\Service\Ia\AiGenerationService`. Le service lit la
 configuration active enregistrée par l’administration ; aucun identifiant de
 fournisseur ni secret ne doit être transmis par l’appelant.
 
 ```php
-$service = new \WPIA\Service\AiGenerationService();
+$service = new \WPIA\Service\Ia\AiGenerationService();
 $result  = $service->generate( 'Résume le texte suivant...' );
 
 if ( is_wp_error( $result ) ) {
@@ -66,7 +66,7 @@ configuration depuis l’administration pour que `CompteApiRepository` la chiffr
 ## Ajouter un fournisseur
 
 1. Ajouter sa configuration par défaut dans `AIProviderCatalog`.
-2. Ajouter un adaptateur dans `src/Service/Fournisseur/` qui étend
+2. Ajouter un adaptateur dans `src/Service/Ia/Fournisseur/` qui étend
    `AbstractProvider` et implémente `generate()`.
 3. Construire l’URL, l’authentification et le payload dans cet adaptateur ; ne
    jamais journaliser la requête ou la clé.
