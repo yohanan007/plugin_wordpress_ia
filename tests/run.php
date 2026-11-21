@@ -1006,5 +1006,209 @@ $run(
 	}
 );
 
-assertSameValue( 40, $tests, 'total passing test count' );
+class IndexCipher extends WPIA\Service\SecretCipher {
+	public function encrypt( string $plaintext ): string {
+		return 'wpia:v1:' . base64_encode( $plaintext );
+	}
+}
+
+class IndexStorage extends WPIA\Service\DocumentStorage {
+	public int $reads = 0;
+	public ?string $content = '';
+
+	public function __construct() {
+	}
+
+	public function read( string $filename ): string {
+		++$this->reads;
+		if ( null === $this->content ) {
+			throw new RuntimeException( 'The stored document is missing or unreadable.' );
+		}
+
+		return $this->content;
+	}
+}
+
+class IndexDocuments extends WPIA\Repository\DocumentRepository {
+	public array $row = array( 'id' => 5, 'fichier' => 'a.wpia', 'statut_indexation' => 'pending' );
+
+	public function getById( int $id ): ?array {
+		return $this->row;
+	}
+
+	public function update( int $id, array $data ): int {
+		$this->row = array_merge( $this->row, $data );
+		return 1;
+	}
+}
+
+class IndexSections extends WPIA\Repository\DocumentSectionRepository {
+	public array $stored = array();
+
+	public function replaceForDocument( int $document_id, array $sections ): void {
+		$this->stored[ $document_id ] = $sections;
+	}
+
+	public function deleteByDocument( int $document_id ): void {
+		unset( $this->stored[ $document_id ] );
+	}
+}
+
+function indexerFixture( string|null $content ): array {
+	$storage          = new IndexStorage();
+	$storage->content = $content;
+	$documents        = new IndexDocuments( new wpdb() );
+	$sections         = new IndexSections( new wpdb() );
+	$indexer          = new WPIA\Service\DocumentIndexer(
+		$storage,
+		$documents,
+		$sections,
+		new IndexCipher(),
+		new WPIA\Service\KeywordNormalizer( 'test-key' )
+	);
+
+	return array( $indexer, $storage, $documents, $sections );
+}
+
+$run(
+	'token estimator: counts characters, not bytes',
+	static function (): void {
+		assertSameValue( 100, WPIA\Service\TokenEstimator::estimer( str_repeat( 'é', 400 ) ), 'accented text' );
+		assertSameValue( 0, WPIA\Service\TokenEstimator::estimer( '' ), 'empty text' );
+	}
+);
+
+$run(
+	'sectionizer: titles, introduction and code blocks',
+	static function (): void {
+		$md = "Préambule\n\n# CV\nTexte A\n\n## Expériences\nPHP 8\n```\n# pas un titre\n```\n### Détail\nFin\n#### Sous-niveau ignoré\nsuite";
+		$s  = ( new WPIA\Service\MarkdownSectionizer() )->decouper( $md );
+		assertSameValue( array( 'Introduction', 'CV', 'Expériences', 'Détail' ), array_column( $s, 'titre' ), 'titles' );
+		assertTrue( str_contains( $s[2]['contenu'], '# pas un titre' ), 'hash in code block stays in the section' );
+		assertTrue( str_contains( $s[3]['contenu'], '#### Sous-niveau ignoré' ), 'level 4 is not a split point' );
+		assertSameValue( WPIA\Service\TokenEstimator::estimer( $s[1]['contenu'] ), $s[1]['tokens'], 'tokens of the section' );
+	}
+);
+
+$run(
+	'sectionizer: no title, empty sections and oversized sections',
+	static function (): void {
+		$z = new WPIA\Service\MarkdownSectionizer();
+		$s = $z->decouper( "Juste du texte.\n\nEncore." );
+		assertSameValue( array( 'Introduction' ), array_column( $s, 'titre' ), 'single introduction' );
+		assertSameValue( array(), $z->decouper( "# Vide\n\n## Aussi vide\n" ), 'only empty sections' );
+
+		$long = '# Gros' . "\n" . implode( "\n\n", array_fill( 0, 10, str_repeat( 'mot ', 50 ) ) );
+		$s    = $z->decouper( $long, 100 );
+		assertTrue( count( $s ) > 1, 'oversized section is split' );
+		foreach ( $s as $section ) {
+			assertTrue( $section['tokens'] <= 100, 'each part respects the cap' );
+			assertSameValue( 'Gros', $section['titre'], 'parts keep the title' );
+		}
+
+		$s = $z->decouper( "# Un seul bloc\n" . str_repeat( 'x', 2000 ), 100 );
+		foreach ( $s as $section ) {
+			assertTrue( $section['tokens'] <= 100, 'a single huge line is cut by characters' );
+		}
+		$s = $z->decouper( "# Chevrons\n" . str_repeat( '<', 400 ), 100 );
+		foreach ( $s as $section ) {
+			assertTrue( $section['tokens'] <= 100, 'escaped size respects the cap' );
+		}
+	}
+);
+
+$run(
+	'sectionizer: tokens are measured on the escaped text',
+	static function (): void {
+		$s = ( new WPIA\Service\MarkdownSectionizer() )->decouper( '</documents>' );
+		assertSameValue( WPIA\Service\TokenEstimator::estimer( '&lt;/documents&gt;' ), $s[0]['tokens'], 'escaped tokens' );
+	}
+);
+
+$run(
+	'keyword normalizer: accents, case, plural and suffixes',
+	static function (): void {
+		$n = new WPIA\Service\KeywordNormalizer( 'k' );
+		assertSameValue( $n->empreintes( 'Développement' ), $n->empreintes( 'développeurs' ), 'développement = développeurs' );
+		assertSameValue( $n->empreintes( 'PHP' ), $n->empreintes( 'php' ), 'case' );
+		assertSameValue( $n->empreintes( 'compétences' ), $n->empreintes( 'COMPETENCE' ), 'accents and plural' );
+		assertTrue( $n->empreintes( 'C++' ) !== $n->empreintes( 'C#' ), 'c++ and c# differ' );
+		assertSameValue( array( 'c++', 'c#' ), $n->termes( 'C++ et C#' ), 'c++ and c# are kept' );
+		assertSameValue( array(), $n->termes( 'Le la les de the and ## **' ), 'stop words and markup are ignored' );
+	}
+);
+
+$run(
+	'keyword normalizer: HMAC only, keyed, deterministic',
+	static function (): void {
+		$a = new WPIA\Service\KeywordNormalizer( 'key-a' );
+		$b = new WPIA\Service\KeywordNormalizer( 'key-b' );
+		assertSameValue( $a->serialiser( 'Symfony Laravel' ), $a->serialiser( 'Symfony Laravel' ), 'deterministic' );
+		assertTrue( $a->serialiser( 'Symfony' ) !== $b->serialiser( 'Symfony' ), 'depends on the key' );
+		assertTrue( ! str_contains( strtolower( $a->serialiser( 'Symfony Laravel' ) ), 'symfony' ), 'no clear term stored' );
+		assertTrue( 1 === preg_match( '/^[0-9a-f]{16} [0-9a-f]{16}$/', $a->serialiser( 'Symfony Laravel' ) ), 'serialized format' );
+		$threw = false;
+		try {
+			new WPIA\Service\KeywordNormalizer( '' );
+		} catch ( InvalidArgumentException $e ) {
+			$threw = true;
+		}
+		assertTrue( $threw, 'empty key refused' );
+	}
+);
+
+$run(
+	'document indexer: sections encrypted, keywords hashed, status ready',
+	static function (): void {
+		list( $indexer, , $documents, $sections ) = indexerFixture( "# Compétences\nSymfony et PHP\n\n# Parcours\nÉtudes d'informatique" );
+		$result = $indexer->indexer( 5, 800 );
+		assertSameValue( 2, $result['sections'], 'two sections' );
+		assertSameValue( 'ready', $documents->row['statut_indexation'], 'status ready' );
+		assertSameValue( hash( 'sha256', "# Compétences\nSymfony et PHP\n\n# Parcours\nÉtudes d'informatique" ), $documents->row['hash'], 'hash updated' );
+		foreach ( $sections->stored[5] as $section ) {
+			assertTrue( str_starts_with( $section['contenu'], 'wpia:v1:' ), 'content encrypted' );
+			assertTrue( ! str_contains( strtolower( $section['mots_cles'] ), 'symfony' ), 'no clear keyword' );
+			assertTrue( '' !== $section['mots_cles'], 'keywords present' );
+		}
+	}
+);
+
+$run(
+	'document indexer: unreadable file gives error status without content in the message',
+	static function (): void {
+		list( $indexer, , $documents, $sections ) = indexerFixture( null );
+		$sections->stored[5] = array( array( 'contenu' => 'old' ) );
+		$message = '';
+		try {
+			$indexer->indexer( 5 );
+		} catch ( RuntimeException $e ) {
+			$message = $e->getMessage();
+		}
+		assertTrue( '' !== $message, 'failure is reported' );
+		assertSameValue( 'error', $documents->row['statut_indexation'], 'status error' );
+		assertTrue( ! isset( $sections->stored[5] ), 'old sections removed' );
+
+		list( $indexer, , $documents ) = indexerFixture( "   \n" );
+		try {
+			$indexer->indexer( 5 );
+		} catch ( RuntimeException $e ) {
+			$message = $e->getMessage();
+		}
+		assertSameValue( 'error', $documents->row['statut_indexation'], 'empty document gives error' );
+	}
+);
+
+$run(
+	'document indexer: reindexing replaces the sections',
+	static function (): void {
+		list( $indexer, $storage, , $sections ) = indexerFixture( "# A\ntexte un\n# B\ntexte deux" );
+		$indexer->indexer( 5 );
+		$storage->content = "# C\nseul";
+		$indexer->indexer( 5 );
+		assertSameValue( 1, count( $sections->stored[5] ), 'only the new sections remain' );
+		assertSameValue( 'C', $sections->stored[5][0]['titre'], 'new title' );
+	}
+);
+
+assertSameValue( 49, $tests, 'total passing test count' );
 echo "All {$tests} tests passed.\n";

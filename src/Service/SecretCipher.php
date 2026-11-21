@@ -81,6 +81,26 @@ class SecretCipher {
 		return $plaintext;
 	}
 
+	/**
+	 * Clé indépendante dérivée des mêmes salts, pour un usage donné (par exemple
+	 * les HMAC de mots-clés). Un contexte différent donne une clé différente.
+	 */
+	public function derive( string $context ): string {
+		if ( '' === $context ) {
+			throw new RuntimeException( 'The key derivation context cannot be empty.' );
+		}
+		if ( ! $this->isAvailable() ) {
+			throw new RuntimeException( 'OpenSSL or the WordPress authentication key is unavailable.' );
+		}
+
+		$key = hash_hkdf( 'sha256', wp_salt( 'auth' ) . wp_salt( 'secure_auth' ), 32, $context );
+		if ( false === $key || 32 !== strlen( $key ) ) {
+			throw new RuntimeException( 'Unable to derive the key.' );
+		}
+
+		return $key;
+	}
+
 	private function getKey(): string {
 		$material = wp_salt( 'auth' ) . wp_salt( 'secure_auth' );
 		$key      = hash_hkdf( 'sha256', $material, 32, 'wpia-api-secret-v1' );

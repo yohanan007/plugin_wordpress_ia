@@ -254,3 +254,19 @@ Embeddings et recherche sémantique ; formats autres que `.md` ; documents dista
 1. **Rôles** : « contexte / complet » est bien un rôle porté par l'association. Le champ texte « Contexte » saisi dans l'admin est écarté, car il dupliquerait l'import, le chiffrement et le calcul de version.
 2. **Limite du contexte** : refus quand l'admin provoque lui-même le dépassement (association, changement de rôle) ; simple avertissement quand il vient d'une réindexation ou d'un réglage abaissé. Jamais de troncature.
 3. **Partage avec 009** : pas de fusion. 009 produit le texte des blocs [1] et [2] (`PromptBuilder`, champ des consignes et sa validation) ; 006 produit les blocs [3] et [4] et fait l'assemblage (`PromptAssembler`). La règle de 009 « répondre uniquement à partir de `<documents>` » est étendue à `<contexte>`, avec une variante pour les chatbots sans document.
+
+---
+---
+
+# Avancement du 2026-11-20 : lot A livré
+
+Tâches 1 à 6 faites. Écarts et précisions par rapport à la spécification :
+
+- **Import :** le document est enregistré en `pending` dans la transaction existante, puis `DocumentIndexer` est appelé **après le COMMIT** (la transaction des sections ne doit pas être imbriquée : MySQL validerait l'autre implicitement). Un échec d'indexation conserve le document en `error` et affiche un message dédié.
+- **Mots-clés :** les empreintes HMAC sont tronquées à 16 caractères hexadécimaux (64 bits) pour limiter la taille stockée. La clé vient de `SecretCipher::derive( 'wpia-keywords-v1' )`.
+- **Normalisation sans extension PHP :** table d'accents fixe et `strtolower` (ni `mbstring` ni `intl`). Racinisation : pluriel puis un suffixe parmi `ement, ation, ateur, euse, eur, ment, ite, ion, ee, er, ez, e`, reste d'au moins 4 caractères. Les termes avec chiffre, `+` ou `#` ne sont pas racinisés. `KeywordNormalizer::VERSION = 1`.
+- **Tokens :** `TokenEstimator` existait déjà (009 partie 1). Les sections sont estimées sur le texte échappé (`MarkdownSectionizer::echapper()`, réutilisable par le lot B).
+- **Migration 1.3.0 :** table `wpia_document_section` ; les documents `ready` repassent en `pending` ; avis sur la page « Documents ». Réglage `context_section_max_tokens` (800, de 100 à 5 000).
+- **Suppression d'un document :** retire aussi ses sections.
+- **Tests :** 9 nouveaux (49 au total).
+- **Reste à faire pour le lot B :** colonne `role`, `ContextBuilder`, `PromptAssembler`, version du contexte, jauge. La méthode `getKey()` de `SecretCipher` reste privée ; seules les clés dérivées sont exposées.
