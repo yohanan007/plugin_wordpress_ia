@@ -1,8 +1,8 @@
 <?php
 
-namespace WPIA\Service\Fournisseur;
+namespace WPIA\Service\Ia\Fournisseur;
 
-class OpenAiProvider extends AbstractProvider {
+class MistralProvider extends AbstractProvider {
 	/**
 	 * @param array<string, mixed> $parameters
 	 * @return array|\WP_Error

@@ -1,8 +1,9 @@
 <?php
 
-namespace WPIA\Service;
+namespace WPIA\Service\Document;
 
 use RuntimeException;
+use WPIA\Service\Securite\SecretCipher;
 
 class DocumentStorage {
 	private const MAX_SIZE = 2097152;

@@ -20,6 +20,7 @@ class AdminSettings {
 			'chatbot_enabled'        => 0,
 			'chatbot_template'       => '',
 			'api_timeout'            => 30,
+			'context_section_max_tokens' => 800,
 		);
 	}
 
@@ -53,6 +54,7 @@ class AdminSettings {
 			'token_alert_threshold'   => array( 1, 100 ),
 			'api_timeout'             => array( 1, 120 ),
 			'usage_retention_days'    => array( 1, 365 ),
+			'context_section_max_tokens' => array( 100, 5000 ),
 		);
 
 		foreach ( $numeric_ranges as $key => $range ) {
@@ -123,6 +125,7 @@ class AdminSettings {
 			'token_alert_threshold'   => __( 'Seuil d’alerte e-mail (pourcentage du budget)', 'plugin-wordpress-ia' ),
 			'api_timeout'             => __( 'Délai maximal du test API (secondes)', 'plugin-wordpress-ia' ),
 			'usage_retention_days'    => __( 'Conservation des compteurs visiteurs (jours)', 'plugin-wordpress-ia' ),
+			'context_section_max_tokens' => __( 'Taille maximale d’une section de document (tokens, appliquée à la prochaine indexation)', 'plugin-wordpress-ia' ),
 		);
 
 		foreach ( $fields as $key => $label ) {

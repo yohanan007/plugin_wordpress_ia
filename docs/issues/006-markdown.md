@@ -64,7 +64,7 @@ Chaque question envoyée à l'IA est accompagnée du contenu utile des documents
 ### Tâches
 
 1. Migration : table `wpia_document_section`, réglages `context_token_budget` et `context_section_max_tokens` dans `AdminSettings`.
-2. **`MarkdownSectionizer`** (`src/Service/`) : fonction pure `decouper( string $markdown ): array`, sans WordPress, facile à tester.
+2. **`MarkdownSectionizer`** (`src/Service/Document/`) : fonction pure `decouper( string $markdown ): array`, sans WordPress, facile à tester.
 3. **`DocumentIndexer`** : à l'import ou à la réindexation, lit via `DocumentStorage`, découpe, chiffre, enregistre, puis met à jour `taille_tokens`, `statut_indexation` et la version du contexte. Un échec passe le statut à `error`, avec une raison journalisée sans contenu.
 4. **`ContextBuilder`** : `construire( int $chatbot_id, string $question ): array{texte:string,tokens:int,sections:int[],mode:string}`. Il ne lit que `wpia_document_section` : aucun accès disque, aucun redécoupage.
 5. Brancher `ContextBuilder` dans la requête de génération définie par 008.
@@ -198,9 +198,9 @@ Le champ « Consignes complémentaires », sa limite de taille et ses balises in
 #### Lot A : indexation (aucune dépendance, peut démarrer tout de suite)
 
 1. **Migration** : table `wpia_document_section`, réglage `context_section_max_tokens` dans `AdminSettings`. Les documents existants passent en `pending`, et un avis invite l'admin à les réindexer.
-2. **`TokenEstimator`** (`src/Service/`) : estimation unique des tokens ; remplace les `strlen / 4` de `AdminController`.
-3. **`MarkdownSectionizer`** (`src/Service/`) : fonction pure `decouper( string $markdown ): array`, sans WordPress.
-4. **`KeywordNormalizer`** (`src/Service/`) : normalisation et HMAC des termes ; pure, la clé étant injectée.
+2. **`TokenEstimator`** (`src/Service/Prompt/`) : estimation unique des tokens ; remplace les `strlen / 4` de `AdminController`.
+3. **`MarkdownSectionizer`** (`src/Service/Document/`) : fonction pure `decouper( string $markdown ): array`, sans WordPress.
+4. **`KeywordNormalizer`** (`src/Service/Document/`) : normalisation et HMAC des termes ; pure, la clé étant injectée.
 5. **`DocumentIndexer`** : lecture via `DocumentStorage`, découpage, chiffrement, mots-clés, enregistrement des sections (en remplaçant les anciennes), mise à jour de `taille_tokens` et `statut_indexation`. L'import et la réindexation passent par lui.
 6. **Admin, page « Documents »** : statut réel et nombre de sections par document. Le texte « le statut prêt indique que le Markdown a été stocké et validé » est remplacé.
 
@@ -208,7 +208,7 @@ Le champ « Consignes complémentaires », sa limite de taille et ses balises in
 
 7. **Migration** : colonne `wpia_chatbot_document.role`, réglages `context_token_budget` et `context_fixed_max_tokens` dans `AdminSettings`.
 8. **`ContextBuilder`** : `construire( int $chatbot_id, string $question ): array{contexte:string, complet:string, mode:string, tokens:array, sections:int[]}`. Il ne lit que `wpia_document_section` : aucun accès disque, aucun redécoupage.
-9. **`PromptAssembler`** (`src/Prompt/`) : reçoit les blocs [1] et [2] de `PromptBuilder` (009) et les blocs [3] et [4] de `ContextBuilder`, puis renvoie `{systeme: {stable, variable}, releve}`. Il est branché dans `generateChat()` (008).
+9. **`PromptAssembler`** (`src/Service/Prompt/`) : reçoit les blocs [1] et [2] de `PromptBuilder` (009) et les blocs [3] et [4] de `ContextBuilder`, puis renvoie `{systeme: {stable, variable}, releve}`. Il est branché dans `generateChat()` (008).
 10. **Version du contexte** : calcul et mise à jour à chaque événement listé dans les décisions.
 11. **Admin, page « Documents »** : sélecteur de rôle (Contexte / Complet) par association ; jauge en trois segments (contexte, complet, place restante) ; mode prévu (complet ou sélection) ; refus ou avertissement quand le contexte dépasse sa limite.
 12. **Documentation** : `documentation/contexte.md` (les trois parties et leur rôle, ce qu'on met dans les consignes de l'admin et ce qu'on met dans le Markdown de contexte, un modèle de document de contexte, le format recommandé d'un document complet, les budgets et les deux modes). La mise à jour de `claude.md` sur le mode complet ne fait pas partie de cette tâche : `claude.md` est protégé (voir le README).
@@ -254,3 +254,19 @@ Embeddings et recherche sémantique ; formats autres que `.md` ; documents dista
 1. **Rôles** : « contexte / complet » est bien un rôle porté par l'association. Le champ texte « Contexte » saisi dans l'admin est écarté, car il dupliquerait l'import, le chiffrement et le calcul de version.
 2. **Limite du contexte** : refus quand l'admin provoque lui-même le dépassement (association, changement de rôle) ; simple avertissement quand il vient d'une réindexation ou d'un réglage abaissé. Jamais de troncature.
 3. **Partage avec 009** : pas de fusion. 009 produit le texte des blocs [1] et [2] (`PromptBuilder`, champ des consignes et sa validation) ; 006 produit les blocs [3] et [4] et fait l'assemblage (`PromptAssembler`). La règle de 009 « répondre uniquement à partir de `<documents>` » est étendue à `<contexte>`, avec une variante pour les chatbots sans document.
+
+---
+---
+
+# Avancement du 2026-11-20 : lot A livré
+
+Tâches 1 à 6 faites. Écarts et précisions par rapport à la spécification :
+
+- **Import :** le document est enregistré en `pending` dans la transaction existante, puis `DocumentIndexer` est appelé **après le COMMIT** (la transaction des sections ne doit pas être imbriquée : MySQL validerait l'autre implicitement). Un échec d'indexation conserve le document en `error` et affiche un message dédié.
+- **Mots-clés :** les empreintes HMAC sont tronquées à 16 caractères hexadécimaux (64 bits) pour limiter la taille stockée. La clé vient de `SecretCipher::derive( 'wpia-keywords-v1' )`.
+- **Normalisation sans extension PHP :** table d'accents fixe et `strtolower` (ni `mbstring` ni `intl`). Racinisation : pluriel puis un suffixe parmi `ement, ation, ateur, euse, eur, ment, ite, ion, ee, er, ez, e`, reste d'au moins 4 caractères. Les termes avec chiffre, `+` ou `#` ne sont pas racinisés. `KeywordNormalizer::VERSION = 1`.
+- **Tokens :** `TokenEstimator` existait déjà (009 partie 1). Les sections sont estimées sur le texte échappé (`MarkdownSectionizer::echapper()`, réutilisable par le lot B).
+- **Migration 1.3.0 :** table `wpia_document_section` ; les documents `ready` repassent en `pending` ; avis sur la page « Documents ». Réglage `context_section_max_tokens` (800, de 100 à 5 000).
+- **Suppression d'un document :** retire aussi ses sections.
+- **Tests :** 9 nouveaux (49 au total).
+- **Reste à faire pour le lot B :** colonne `role`, `ContextBuilder`, `PromptAssembler`, version du contexte, jauge. La méthode `getKey()` de `SecretCipher` reste privée ; seules les clés dérivées sont exposées.

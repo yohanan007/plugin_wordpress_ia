@@ -7,9 +7,9 @@
 
 Trois classes pures, sans WordPress, testées dans `tests/run.php` (40 tests) :
 
-- `WPIA\Service\TokenEstimator` : `estimer()` et `caracteres()`.
-- `WPIA\Prompt\CadrageValidator` : `valider( $brut, $actuel, $max_tokens_consignes )` renvoie `{valeurs, erreurs}` ; `consignesTropLongues()`.
-- `WPIA\Prompt\PromptBuilder` : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true )` renvoie `{base, admin}` ; constantes `VERSION`, `JETON_HORS_SUJET`, `SUJET_GENERIQUE`.
+- `WPIA\Service\Prompt\TokenEstimator` : `estimer()` et `caracteres()`.
+- `WPIA\Service\Prompt\CadrageValidator` : `valider( $brut, $actuel, $max_tokens_consignes )` renvoie `{valeurs, erreurs}` ; `consignesTropLongues()`.
+- `WPIA\Service\Prompt\PromptBuilder` : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true )` renvoie `{base, admin}` ; constantes `VERSION`, `JETON_HORS_SUJET`, `SUJET_GENERIQUE`.
 
 Aucune migration, aucun écran, aucun branchement : rien n'est encore utilisé par le plugin.
 

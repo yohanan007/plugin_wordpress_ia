@@ -1,6 +1,6 @@
 <?php
 
-namespace WPIA\Service;
+namespace WPIA\Service\Ia;
 
 use RuntimeException;
 use WPIA\Admin\AdminSettings;
@@ -8,13 +8,14 @@ use WPIA\Repository\ChatbotRepository;
 use WPIA\Repository\CompteApiRepository;
 use WPIA\Repository\FournisseurIARepository;
 use WPIA\Repository\LogRepository;
-use WPIA\Service\Fournisseur\AbstractProvider;
-use WPIA\Service\Fournisseur\AnthropicProvider;
-use WPIA\Service\Fournisseur\CustomProvider;
-use WPIA\Service\Fournisseur\MistralProvider;
-use WPIA\Service\Fournisseur\OllamaProvider;
-use WPIA\Service\Fournisseur\OpenAiProvider;
+use WPIA\Service\Ia\Fournisseur\AbstractProvider;
+use WPIA\Service\Ia\Fournisseur\AnthropicProvider;
+use WPIA\Service\Ia\Fournisseur\CustomProvider;
+use WPIA\Service\Ia\Fournisseur\MistralProvider;
+use WPIA\Service\Ia\Fournisseur\OllamaProvider;
+use WPIA\Service\Ia\Fournisseur\OpenAiProvider;
 use WPIA\Repository\LimiteUtilisationRepository;
+use WPIA\Service\Securite\SecretCipher;
 use WPIA\Service\Usage\UsageLimiter;
 use WPIA\Service\Usage\VisitorIdentity;
 

@@ -19,7 +19,7 @@ if ( ! defined( 'WPIA_VERSION' ) ) {
 }
 
 if ( ! defined( 'WPIA_DB_VERSION' ) ) {
-	define( 'WPIA_DB_VERSION', '1.2.0' );
+	define( 'WPIA_DB_VERSION', '1.3.0' );
 }
 
 require_once __DIR__ . '/vendor/autoload.php';

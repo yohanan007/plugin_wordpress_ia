@@ -1,6 +1,6 @@
 <?php
 
-namespace WPIA\Service\Fournisseur;
+namespace WPIA\Service\Ia\Fournisseur;
 
 class AnthropicProvider extends AbstractProvider {
 	/**
