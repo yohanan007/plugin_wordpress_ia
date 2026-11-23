@@ -21,6 +21,8 @@ class AdminSettings {
 			'chatbot_template'       => '',
 			'api_timeout'            => 30,
 			'context_section_max_tokens' => 800,
+			'context_token_budget'   => 6000,
+			'context_fixed_max_tokens' => 1500,
 			'history_enabled'        => 1,
 			'history_max_messages'   => 6,
 			'history_token_budget'   => 1500,
@@ -58,6 +60,8 @@ class AdminSettings {
 			'api_timeout'             => array( 1, 120 ),
 			'usage_retention_days'    => array( 1, 365 ),
 			'context_section_max_tokens' => array( 100, 5000 ),
+			'context_token_budget'    => array( 500, 100000 ),
+			'context_fixed_max_tokens' => array( 100, 20000 ),
 			'history_max_messages'    => array( 1, 20 ),
 			'history_token_budget'    => array( 100, 20000 ),
 		);
@@ -102,6 +106,10 @@ class AdminSettings {
 			add_settings_error( self::OPTION_NAME, 'wpia_low_conversation_limit', __( 'Les tokens maximum par conversation sont inférieurs à une réponse plus l’historique : les conversations seront coupées très vite.', 'plugin-wordpress-ia' ), 'warning' );
 		}
 
+		if ( (int) $current['context_fixed_max_tokens'] > (int) $current['context_token_budget'] ) {
+			add_settings_error( self::OPTION_NAME, 'wpia_context_over_budget', __( 'La taille maximale du contexte dépasse le budget total des documents : un contexte de cette taille ne laisserait aucune place aux documents complets.', 'plugin-wordpress-ia' ), 'warning' );
+		}
+
 		if ( isset( $input['chatbot_template'] ) && is_string( $input['chatbot_template'] ) ) {
 			$template = sanitize_text_field( wp_unslash( $input['chatbot_template'] ) );
 			$templates = wp_get_theme()->get_page_templates();
@@ -144,6 +152,8 @@ class AdminSettings {
 			'api_timeout'             => __( 'Délai maximal du test API (secondes)', 'plugin-wordpress-ia' ),
 			'usage_retention_days'    => __( 'Conservation des compteurs visiteurs (jours)', 'plugin-wordpress-ia' ),
 			'context_section_max_tokens' => __( 'Taille maximale d’une section de document (tokens, appliquée à la prochaine indexation)', 'plugin-wordpress-ia' ),
+			'context_token_budget'    => __( 'Documents : budget total envoyé à l’IA (tokens, contexte et documents complets)', 'plugin-wordpress-ia' ),
+			'context_fixed_max_tokens' => __( 'Documents : taille maximale du contexte toujours envoyé en entier (tokens)', 'plugin-wordpress-ia' ),
 			'history_max_messages'    => __( 'Historique : nombre maximum de messages renvoyés au fournisseur', 'plugin-wordpress-ia' ),
 			'history_token_budget'    => __( 'Historique : budget maximal (tokens)', 'plugin-wordpress-ia' ),
 		);

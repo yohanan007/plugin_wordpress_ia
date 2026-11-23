@@ -5,8 +5,9 @@ les deux premiers blocs de son prompt système. La spécification (champs, limit
 décisions) est dans `docs/issues/009-cadrage-garde-fous.md` ; le reste du travail
 est dans `docs/issues/009-cadrage-garde-fous-2.md`.
 
-> **État :** seules les trois classes ci-dessous existent. Elles ne sont pas
-> encore appelées par le plugin (voir « À venir »).
+> **État :** `PromptBuilder` est appelé par `PromptAssembler` (006, voir
+> [contexte.md](contexte.md)) à chaque génération. Le reste de la section « À venir »
+> n'est pas fait.
 
 ## Place dans le prompt système
 

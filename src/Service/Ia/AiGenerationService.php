@@ -15,6 +15,7 @@ use WPIA\Service\Ia\Fournisseur\MistralProvider;
 use WPIA\Service\Ia\Fournisseur\OllamaProvider;
 use WPIA\Service\Ia\Fournisseur\OpenAiProvider;
 use WPIA\Repository\LimiteUtilisationRepository;
+use WPIA\Service\Prompt\PromptAssembler;
 use WPIA\Service\Prompt\TokenEstimator;
 use WPIA\Service\Securite\SecretCipher;
 use WPIA\Service\Usage\UsageLimiter;
@@ -30,8 +31,9 @@ class AiGenerationService {
 	private ResponseNormalizer $normalizer;
 	private ?UsageLimiter $limiter;
 	private VisitorIdentity $identity;
+	private ?PromptAssembler $assembler;
 
-	public function __construct( ?\wpdb $wpdb = null, ?SecretCipher $cipher = null, ?ResponseNormalizer $normalizer = null, ?UsageLimiter $limiter = null, ?VisitorIdentity $identity = null ) {
+	public function __construct( ?\wpdb $wpdb = null, ?SecretCipher $cipher = null, ?ResponseNormalizer $normalizer = null, ?UsageLimiter $limiter = null, ?VisitorIdentity $identity = null, ?PromptAssembler $assembler = null ) {
 		if ( null === $wpdb && isset( $GLOBALS['wpdb'] ) && $GLOBALS['wpdb'] instanceof \wpdb ) {
 			$wpdb = $GLOBALS['wpdb'];
 		}
@@ -41,6 +43,7 @@ class AiGenerationService {
 		$this->normalizer = $normalizer ?? new ResponseNormalizer();
 		$this->limiter    = $limiter ?? ( null !== $wpdb ? new UsageLimiter( new LimiteUtilisationRepository( $wpdb ) ) : null );
 		$this->identity   = $identity ?? new VisitorIdentity();
+		$this->assembler  = $assembler;
 	}
 
 	/**
@@ -134,6 +137,9 @@ class AiGenerationService {
 
 		$question     = $messages[ count( $messages ) - 1 ];
 		$systeme      = $this->buildSystem( $config, $question['content'] );
+		if ( is_wp_error( $systeme ) ) {
+			return $this->logFailure( 'prompt', $systeme );
+		}
 		$historique   = $this->tronquerHistorique( array_slice( $messages, 0, -1 ), AdminSettings::get() );
 		$conversation = array_merge( $historique, array( $question ) );
 
@@ -249,6 +255,7 @@ class AiGenerationService {
 			'provider'      => $type,
 			'url'            => $url,
 			'model'          => $model,
+			'chatbot'        => $chatbot,
 			'system_prompt'  => isset( $chatbot['system_prompt'] ) && is_string( $chatbot['system_prompt'] ) ? $chatbot['system_prompt'] : '',
 			'temperature'    => $temp,
 			'max_tokens'     => $max,
@@ -258,18 +265,34 @@ class AiGenerationService {
 	}
 
 	/**
-	 * Prompt système construit côté serveur, jamais reçu de la requête.
-	 * Lot A : les consignes du chatbot seules. 006 et 009 remplaceront ce corps
-	 * (assemblage des blocs) en gardant le même type de retour.
+	 * Prompt système construit côté serveur, jamais reçu de la requête : les quatre
+	 * blocs de PromptAssembler (règles, consignes de l'admin, contexte, documents).
+	 * En cas d'échec de lecture, la requête est refusée plutôt qu'envoyée sans les
+	 * règles ni les documents.
 	 *
 	 * @param array<string, mixed> $config
-	 * @return array{stable:string,variable:string}
+	 * @return array{stable:string,variable:string}|\WP_Error
 	 */
-	private function buildSystem( array $config, string $question ): array {
-		return array(
-			'stable'   => $config['system_prompt'],
-			'variable' => '',
-		);
+	private function buildSystem( array $config, string $question ): array|\WP_Error {
+		try {
+			// Création différée : elle dérive des clés et peut échouer (OpenSSL indisponible).
+			$assembler = $this->assembler ?? ( null !== $this->wpdb ? PromptAssembler::create( $this->wpdb ) : null );
+			if ( null === $assembler ) {
+				return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est indisponible.', 'plugin-wordpress-ia' ) );
+			}
+			$resultat = $assembler->assembler( $config['chatbot'], (string) get_bloginfo( 'name' ), $question );
+		} catch ( RuntimeException $exception ) {
+			return $this->failure( 'wpia_configuration_error', __( 'Le contexte du chatbot est indisponible.', 'plugin-wordpress-ia' ) );
+		}
+
+		// Relevé sans aucun contenu : mode, tokens par bloc, identifiants de sections.
+		try {
+			( new LogRepository( $this->wpdb ) )->create( 'info', 'prompt', (string) wp_json_encode( $resultat['releve'] ) );
+		} catch ( RuntimeException $exception ) {
+			error_log( 'WPIA: unable to log the prompt statement.' );
+		}
+
+		return $resultat['systeme'];
 	}
 
 	/**
