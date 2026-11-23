@@ -58,12 +58,21 @@ Le prompt système contient un **marqueur témoin** aléatoire, généré une fo
 
 ## Tâches
 
-1. Migration : colonnes de cadrage dans `wpia_chatbot`.
-2. **`PromptBuilder`** (`src/Service/`) : `construire( array $chatbot, string $contexte ): string`. C'est une fonction pure, sans appel à WordPress en dehors du nom du site passé en paramètre.
-3. Admin « Configuration IA » : section « Cadrage du chatbot », avec un **aperçu en lecture seule** du prompt généré (sans le marqueur témoin) et une estimation de sa taille en tokens.
-4. Branchement dans `AiGenerationService::generateChat()` (008) et vérification du marqueur sur la réponse.
-5. **Jeu d'évaluation** : `tests/evaluation/questions.md` contient environ 20 questions classées en trois catégories (dans le sujet, hors sujet, piège) avec le comportement attendu. Un script `tests/evaluation/run.php` les envoie au fournisseur configuré et produit un rapport. Il est **lancé à la main uniquement** (il coûte de l'ordre de 20 appels) après chaque modification du cadrage ou des documents.
-6. Documentation : `documentation/cadrage.md`, avec des conseils de rédaction des champs et un exemple complet pour un CV.
+Les tâches 1, 3 et 4 du lot A, ainsi que le lot B, sont dans la [partie 2](009-cadrage-garde-fous-2.md).
+
+### Lot A : cadrage et prompt (aucune dépendance)
+
+- [x] **Partie 1 : `TokenEstimator`** (`src/Service/Prompt/`) : estimation unique `ceil( caractères / 4 )`, comptée en caractères UTF-8 sans `mbstring`.
+- [x] **Partie 1 : `CadrageValidator`** (`src/Service/Prompt/`) : validation du texte brut, refus ciblé champ par champ, codes d'erreur traduits par l'appelant. Fonction pure.
+- [x] **Partie 1 : `PromptBuilder`** (`src/Service/Prompt/`) : `construire( array $chatbot, string $nom_site, bool $avec_documents, bool $avec_marqueur = true ): array{base:string, admin:string}`, avec la constante `VERSION`. Il prend un tableau (une ligne `wpia_chatbot`) et non l'entité `Chatbot`, qui n'est utilisée nulle part. C'est une fonction pure, sans appel à WordPress : le nom du site est passé en paramètre, et le marqueur est lu depuis le chatbot, jamais généré ici. Un sujet vide est remplacé par `SUJET_GENERIQUE`.
+- [ ] 1. Migration, section d'administration et documentation : voir la [partie 2](009-cadrage-garde-fous-2.md).
+
+### Lot B : branchement et évaluation (après 008 et 006 lot B)
+
+Voir la [partie 2](009-cadrage-garde-fous-2.md). Description conservée ici pour mémoire :
+
+5. Branchement : `PromptBuilder` est appelé par `PromptAssembler` (006), lui-même branché dans `AiGenerationService::generateChat()` (008). Le contrôle de sortie (marqueur, puis jeton `[[HORS_SUJET]]`) se fait dans `generateChat()`, avant toute mise en cache.
+6. **Jeu d'évaluation** : `tests/evaluation/questions.md` contient environ 20 questions classées en trois catégories (dans le sujet, hors sujet, piège) avec le comportement attendu. Un script `tests/evaluation/run.php` les envoie au fournisseur configuré **avec une température forcée à 0**, compare la réponse brute (avant remplacement) au comportement attendu, et produit un rapport. Il est **lancé à la main uniquement** (il coûte de l'ordre de 20 appels) après chaque modification du cadrage ou des documents.
 
 ### Exemples pour le jeu d'évaluation
 

@@ -9,12 +9,15 @@ use WPIA\Repository\ChatbotRepository;
 use WPIA\Repository\CompteApiRepository;
 use WPIA\Repository\ConversationRepository;
 use WPIA\Repository\DocumentRepository;
+use WPIA\Repository\DocumentSectionRepository;
 use WPIA\Repository\FournisseurIARepository;
 use WPIA\Repository\LimiteUtilisationRepository;
 use WPIA\Repository\LogRepository;
-use WPIA\Service\AIProviderCatalog;
-use WPIA\Service\DocumentStorage;
-use WPIA\Service\SecretCipher;
+use WPIA\Service\Ia\AIProviderCatalog;
+use WPIA\Service\Document\DocumentIndexer;
+use WPIA\Service\Document\DocumentStorage;
+use WPIA\Service\Securite\SecretCipher;
+use WPIA\Service\Prompt\TokenEstimator;
 use WPIA\Service\Usage\UsageLimiter;
 
 /**
@@ -311,6 +314,18 @@ class AdminController {
 		if ( $bot_id > 0 ) {
 			$ordered = ( new ChatbotDocumentRepository( $wpdb ) )->getOrderedDocuments( $bot_id );
 		}
+		$section_counts = array();
+		try {
+			$section_counts = ( new DocumentSectionRepository( $wpdb ) )->countByDocuments( array_map( 'intval', array_column( $rows, 'id' ) ) );
+		} catch ( \RuntimeException $exception ) {
+			$section_counts = array();
+		}
+		$pending = 0;
+		try {
+			$pending = $repository->countAll( array( 'statut_indexation' => 'pending' ) );
+		} catch ( \RuntimeException $exception ) {
+			$pending = 0;
+		}
 		// document_id => position (à partir de 1) dans le chatbot actif. Un document
 		// absent de cette table n'est pas associé au chatbot.
 		$order_map = array();
@@ -321,6 +336,19 @@ class AdminController {
 		<div class="wrap wpia-admin">
 			<h1><?php esc_html_e( 'Documents Markdown', 'plugin-wordpress-ia' ); ?></h1>
 			<?php $this->renderNotice(); ?>
+			<?php if ( $pending > 0 ) : ?>
+				<div class="notice notice-warning inline"><p>
+					<?php
+					echo esc_html(
+						sprintf(
+							/* translators: %d: number of documents waiting for indexing. */
+							_n( '%d document est en attente d’indexation : utilisez « Réindexer le texte » pour le découper en sections.', '%d documents sont en attente d’indexation : utilisez « Réindexer le texte » pour les découper en sections.', $pending, 'plugin-wordpress-ia' ),
+							$pending
+						)
+					);
+					?>
+				</p></div>
+			<?php endif; ?>
 			<p><?php esc_html_e( 'Les fichiers sont chiffrés sur le disque et ne sont pas servis comme des documents Markdown publics. Leur contenu est lu côté serveur uniquement.', 'plugin-wordpress-ia' ); ?></p>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data">
 				<input type="hidden" name="action" value="wpia_upload_document" />
@@ -336,7 +364,7 @@ class AdminController {
 				<select name="status">
 					<option value=""><?php esc_html_e( 'Tous les statuts', 'plugin-wordpress-ia' ); ?></option>
 					<option value="pending" <?php selected( $status, 'pending' ); ?>><?php esc_html_e( 'En attente', 'plugin-wordpress-ia' ); ?></option>
-					<option value="ready" <?php selected( $status, 'ready' ); ?>><?php esc_html_e( 'Prêt (texte)', 'plugin-wordpress-ia' ); ?></option>
+					<option value="ready" <?php selected( $status, 'ready' ); ?>><?php esc_html_e( 'Indexé', 'plugin-wordpress-ia' ); ?></option>
 					<option value="error" <?php selected( $status, 'error' ); ?>><?php esc_html_e( 'Erreur', 'plugin-wordpress-ia' ); ?></option>
 				</select>
 				<?php submit_button( __( 'Filtrer', 'plugin-wordpress-ia' ), 'secondary', '', false ); ?>
@@ -351,13 +379,14 @@ class AdminController {
 					<th><?php esc_html_e( 'Nom', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Ajouté le', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Taille', 'plugin-wordpress-ia' ); ?></th>
-					<th><?php esc_html_e( 'Statut du traitement texte', 'plugin-wordpress-ia' ); ?></th>
+					<th><?php esc_html_e( 'Indexation', 'plugin-wordpress-ia' ); ?></th>
+					<th><?php esc_html_e( 'Sections', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Priorité', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Actions', 'plugin-wordpress-ia' ); ?></th>
 				</tr></thead>
 				<tbody>
 					<?php if ( empty( $rows ) ) : ?>
-						<tr><td colspan="6"><?php esc_html_e( 'Aucun document trouvé.', 'plugin-wordpress-ia' ); ?></td></tr>
+						<tr><td colspan="7"><?php esc_html_e( 'Aucun document trouvé.', 'plugin-wordpress-ia' ); ?></td></tr>
 					<?php endif; ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
@@ -365,6 +394,7 @@ class AdminController {
 							<td><?php echo empty( $row['date_ajout'] ) ? esc_html__( 'Inconnue', 'plugin-wordpress-ia' ) : esc_html( mysql2date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (string) $row['date_ajout'] ) ); ?></td>
 							<td><?php echo esc_html( size_format( (int) $row['taille_octets'] ) ); ?></td>
 							<td><?php echo esc_html( $this->documentStatusLabel( (string) $row['statut_indexation'] ) ); ?></td>
+							<td><?php echo esc_html( (string) ( $section_counts[ (int) $row['id'] ] ?? 0 ) ); ?></td>
 							<td><?php echo isset( $order_map[ (int) $row['id'] ] ) ? esc_html( (string) $order_map[ (int) $row['id'] ] ) : esc_html__( 'Non associé', 'plugin-wordpress-ia' ); ?></td>
 							<td>
 								<?php // Document associé : boutons Monter / Descendre ; sinon : bouton Associer. ?>
@@ -395,7 +425,7 @@ class AdminController {
 				)
 			);
 			?>
-			<p><?php esc_html_e( 'La taille en tokens est une estimation (environ 4 caractères par token). Le statut « prêt » indique que le Markdown a été stocké et validé. Le découpage sémantique, la vectorisation et la recherche contextuelle ne sont pas inclus.', 'plugin-wordpress-ia' ); ?></p>
+			<p><?php esc_html_e( 'La taille en tokens est une estimation (environ 4 caractères par token). Le statut « Indexé » indique que le document a été découpé par titres en sections chiffrées. La transmission de ces sections à l’IA n’est pas encore active.', 'plugin-wordpress-ia' ); ?></p>
 		</div>
 		<?php
 	}
@@ -917,18 +947,18 @@ class AdminController {
 				if ( '' === $designation ) {
 					$designation = __( 'Document Markdown', 'plugin-wordpress-ia' );
 				}
-				// taille_tokens : estimation provisoire (octets / 4), qui surestime les
-				// textes accentués. Elle sera remplacée par TokenEstimator (issue 006).
+				// Le document est enregistré en « pending » : DocumentIndexer le passe
+				// à « ready » une fois les sections créées (après le COMMIT ci-dessous).
 				$id = $repository->create(
 					array(
 						'designation'       => $designation,
 						'description'       => '',
 						'fichier'           => $data['path'],
 						'hash'              => $data['hash'],
-						'taille_tokens'     => (int) ceil( strlen( $data['content'] ) / 4 ),
+						'taille_tokens'     => TokenEstimator::estimer( $data['content'] ),
 						'taille_octets'     => $data['size'],
 						'date_ajout'        => current_time( 'mysql', true ),
-						'statut_indexation' => 'ready',
+						'statut_indexation' => 'pending',
 						'actif'             => 1,
 					)
 				);
@@ -948,6 +978,16 @@ class AdminController {
 			}
 
 			$this->log( 'info', 'document', 'Markdown document uploaded and stored encrypted.' );
+
+			// L'indexation a lieu hors transaction : DocumentSectionRepository ouvre
+			// la sienne. En cas d'échec, le document est conservé en statut « error ».
+			try {
+				DocumentIndexer::create( $wpdb )->indexer( $id, $this->sectionMaxTokens() );
+			} catch ( RuntimeException $exception ) {
+				$this->log( 'error', 'document', $exception->getMessage() );
+				$this->redirect( self::PAGE_DOCUMENTS, 'document_index_failed' );
+			}
+
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_uploaded' );
 		} catch ( RuntimeException $exception ) {
 			$this->log( 'error', 'document', $exception->getMessage() );
@@ -984,6 +1024,7 @@ class AdminController {
 			if ( false === $wpdb->delete( $wpdb->prefix . 'wpia_chatbot_document', array( 'document_id' => $id ), array( '%d' ) ) ) {
 				throw new RuntimeException( 'Unable to remove document priority links.' );
 			}
+			( new DocumentSectionRepository( $wpdb ) )->deleteByDocument( $id );
 			$repository->delete( $id );
 			$this->log( 'info', 'document', 'Markdown document deleted.' );
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_deleted' );
@@ -994,9 +1035,9 @@ class AdminController {
 	}
 
 	/**
-	 * « Réindexer » : relit et déchiffre le fichier, puis recalcule son hash et ses
-	 * tailles. Il n'y a pas encore de découpage en sections (issue 006, lot A) : un
-	 * succès confirme seulement que le fichier est lisible.
+	 * « Réindexer » : relit et déchiffre le fichier, le redécoupe en sections et
+	 * remplace les anciennes (DocumentIndexer). Un échec passe le document en
+	 * statut « error ».
 	 */
 	public function reindexDocument(): void {
 		$this->authorize();
@@ -1008,22 +1049,11 @@ class AdminController {
 		global $wpdb;
 
 		try {
-			$repository = new DocumentRepository( $wpdb );
-			$row        = $repository->getById( $id );
-			if ( ! is_array( $row ) ) {
+			if ( ! is_array( ( new DocumentRepository( $wpdb ) )->getById( $id ) ) ) {
 				$this->redirect( self::PAGE_DOCUMENTS, 'document_not_found' );
 			}
-			$content = ( new DocumentStorage( new SecretCipher() ) )->read( (string) $row['fichier'] );
-			$repository->update(
-				$id,
-				array(
-					'hash'              => hash( 'sha256', $content ),
-					'taille_tokens'     => (int) ceil( strlen( $content ) / 4 ),
-					'taille_octets'     => strlen( $content ),
-					'statut_indexation' => 'ready',
-				)
-			);
-			$this->log( 'info', 'document', 'Markdown text validation completed.' );
+			DocumentIndexer::create( $wpdb )->indexer( $id, $this->sectionMaxTokens() );
+			$this->log( 'info', 'document', 'Markdown document indexed.' );
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_reindexed' );
 		} catch ( RuntimeException | InvalidArgumentException $exception ) {
 			$this->log( 'error', 'document', $exception->getMessage() );
@@ -1340,7 +1370,8 @@ class AdminController {
 			'save_failed'              => array( 'error', __( 'La configuration n’a pas pu être enregistrée. Consultez les journaux.', 'plugin-wordpress-ia' ) ),
 			'document_uploaded'        => array( 'success', __( 'Document téléversé et protégé.', 'plugin-wordpress-ia' ) ),
 			'document_deleted'         => array( 'success', __( 'Document supprimé.', 'plugin-wordpress-ia' ) ),
-			'document_reindexed'       => array( 'success', __( 'Le contenu Markdown a été relu et validé.', 'plugin-wordpress-ia' ) ),
+			'document_reindexed'       => array( 'success', __( 'Le document a été relu et découpé en sections.', 'plugin-wordpress-ia' ) ),
+			'document_index_failed'    => array( 'error', __( 'Le document a été enregistré, mais son indexation a échoué. Consultez les journaux, puis réindexez-le.', 'plugin-wordpress-ia' ) ),
 			'document_failed'          => array( 'error', __( 'L’opération documentaire a échoué. Consultez les journaux.', 'plugin-wordpress-ia' ) ),
 			'document_not_found'       => array( 'error', __( 'Document introuvable.', 'plugin-wordpress-ia' ) ),
 			'priority_saved'           => array( 'success', __( 'Priorité documentaire mise à jour.', 'plugin-wordpress-ia' ) ),
@@ -1427,10 +1458,14 @@ class AdminController {
 	/**
 	 * Libellé traduit d'un statut d'indexation (`pending`, `ready`, `error`).
 	 */
+	private function sectionMaxTokens(): int {
+		return max( 1, (int) AdminSettings::get()['context_section_max_tokens'] );
+	}
+
 	private function documentStatusLabel( string $status ): string {
 		$labels = array(
 			'pending' => __( 'En attente', 'plugin-wordpress-ia' ),
-			'ready'   => __( 'Prêt (texte validé)', 'plugin-wordpress-ia' ),
+			'ready'   => __( 'Indexé', 'plugin-wordpress-ia' ),
 			'error'   => __( 'Erreur', 'plugin-wordpress-ia' ),
 		);
 

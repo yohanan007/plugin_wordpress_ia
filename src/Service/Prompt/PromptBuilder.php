@@ -1,6 +1,6 @@
 <?php
 
-namespace WPIA\Prompt;
+namespace WPIA\Service\Prompt;
 
 /**
  * Produit les deux premiers blocs du prompt système (issue 009) :

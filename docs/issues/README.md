@@ -12,8 +12,8 @@ Les noms de fichiers, les titres internes et les numéros GitHub ne suivent pas 
 | [0002-interface-admin.md](0002-interface-admin.md) | Interface d'administration | #5 | `5-mis-en-place-de-linterface-admin-du-plugin` | Livrée (PR #6, #7) |
 | [0003-service-ia.md](0003-service-ia.md) | Service de génération IA | #8 | `8-ajouter-la-génération-ia-via-les-fournisseurs-configurés` | Livrée |
 | [0004-prompt-initiale.md](0004-prompt-initiale.md) | **Persistance des conversations** (malgré le nom) | #10 | `10-persister-et-protéger-les-conversations` | À faire, facultative pour le MVP |
-| [005-appliquer_limite.md](005-appliquer_limite.md) | Limites de consommation | #11 | `11-appliquer-les-limites-de-consommation` | **En cours** |
-| [006-markdown.md](006-markdown.md) | Contexte documentaire envoyé à l'IA | à créer | — | À faire |
+| [005-appliquer_limite.md](005-appliquer_limite.md) | Limites de consommation | #11 | `11-appliquer-les-limites-de-consommation` | Livrée (PR #16) |
+| [006-markdown.md](006-markdown.md) | Assemblage de la requête IA : prompts, Markdown de contexte et Markdown complet. **Lot A** : indexation des documents ; **lot B** : assemblage | à créer | `9-exploiter-les-documents-markdown-comme-contexte` | **En cours** : **lot A fait le 2026-11-20** (indexation : `MarkdownSectionizer`, `KeywordNormalizer`, `DocumentIndexer`, table `wpia_document_section`) ; lot B après 008 et 009 lot A |
 | [007-chat-publique.md](007-chat-publique.md) | Chat public (shortcode et REST) | à créer | — | À faire |
 | [008-generation-multitours.md](008-generation-multitours.md) | Génération multi-tours (historique, contexte, chatbot) | à créer | — | Nouvelle, **prérequis** de 006, 007 et 009 |
 | [009-cadrage-garde-fous.md](009-cadrage-garde-fous.md) | Cadrage du sujet, garde-fous, jeu d'évaluation | à créer | — | Nouvelle |

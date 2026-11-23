@@ -35,9 +35,6 @@ wp-config.php
 # htaccess
 /.htaccess
 
-#composer
-/vendor/*
-
 agent.md
 claude.md
 deny.md

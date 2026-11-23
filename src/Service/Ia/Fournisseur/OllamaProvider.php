@@ -1,8 +1,8 @@
 <?php
 
-namespace WPIA\Service\Fournisseur;
+namespace WPIA\Service\Ia\Fournisseur;
 
-class CustomProvider extends AbstractProvider {
+class OllamaProvider extends AbstractProvider {
 	/**
 	 * @param array<string, mixed> $parameters
 	 * @return array|\WP_Error
@@ -21,15 +21,19 @@ class CustomProvider extends AbstractProvider {
 		);
 
 		return $this->post(
-			untrailingslashit( $base_url ) . '/chat/completions',
-			array( 'Authorization' => 'Bearer ' . $api_key ),
+			untrailingslashit( $base_url ) . '/api/chat',
+			array(),
 			array(
-				'model'       => $parameters['model'],
-				'messages'    => $messages,
-				'temperature' => $parameters['temperature'],
-				'max_tokens'  => $parameters['max_tokens'],
+				'model'    => $parameters['model'],
+				'messages' => $messages,
+				'stream'   => false,
+				'options'  => array(
+					'temperature' => $parameters['temperature'],
+					'num_predict' => $parameters['max_tokens'],
+				),
 			),
-			$parameters['timeout']
+			$parameters['timeout'],
+			true
 		);
 	}
 }
