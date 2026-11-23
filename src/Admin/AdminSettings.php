@@ -11,9 +11,9 @@ class AdminSettings {
 	public static function defaults(): array {
 		return array(
 			'max_tokens_request'     => 1024,
-			'max_tokens_conversation' => 4096,
+			'max_tokens_conversation' => 40000,
 			'max_messages_user'      => 20,
-			'daily_token_limit'      => 10000,
+			'daily_token_limit'      => 100000,
 			'token_alert_threshold'  => 80,
 			'log_retention'          => 'weekly',
 			'usage_retention_days'   => 7,
@@ -21,6 +21,9 @@ class AdminSettings {
 			'chatbot_template'       => '',
 			'api_timeout'            => 30,
 			'context_section_max_tokens' => 800,
+			'history_enabled'        => 1,
+			'history_max_messages'   => 6,
+			'history_token_budget'   => 1500,
 		);
 	}
 
@@ -55,6 +58,8 @@ class AdminSettings {
 			'api_timeout'             => array( 1, 120 ),
 			'usage_retention_days'    => array( 1, 365 ),
 			'context_section_max_tokens' => array( 100, 5000 ),
+			'history_max_messages'    => array( 1, 20 ),
+			'history_token_budget'    => array( 100, 20000 ),
 		);
 
 		foreach ( $numeric_ranges as $key => $range ) {
@@ -82,6 +87,19 @@ class AdminSettings {
 			$current['chatbot_enabled'] = '1' === $enabled ? 1 : 0;
 		} else {
 			add_settings_error( self::OPTION_NAME, 'wpia_invalid_chatbot_enabled', __( 'Le réglage d’affichage du chatbot est invalide.', 'plugin-wordpress-ia' ), 'error' );
+		}
+
+		$history = isset( $input['history_enabled'] ) && is_string( $input['history_enabled'] )
+			? wp_unslash( $input['history_enabled'] )
+			: '';
+		if ( '' === $history || '1' === $history ) {
+			$current['history_enabled'] = '1' === $history ? 1 : 0;
+		} else {
+			add_settings_error( self::OPTION_NAME, 'wpia_invalid_history_enabled', __( 'Le réglage de conservation de l’historique est invalide.', 'plugin-wordpress-ia' ), 'error' );
+		}
+
+		if ( ! empty( $current['history_enabled'] ) && (int) $current['max_tokens_conversation'] < (int) $current['max_tokens_request'] + (int) $current['history_token_budget'] ) {
+			add_settings_error( self::OPTION_NAME, 'wpia_low_conversation_limit', __( 'Les tokens maximum par conversation sont inférieurs à une réponse plus l’historique : les conversations seront coupées très vite.', 'plugin-wordpress-ia' ), 'warning' );
 		}
 
 		if ( isset( $input['chatbot_template'] ) && is_string( $input['chatbot_template'] ) ) {
@@ -126,6 +144,8 @@ class AdminSettings {
 			'api_timeout'             => __( 'Délai maximal du test API (secondes)', 'plugin-wordpress-ia' ),
 			'usage_retention_days'    => __( 'Conservation des compteurs visiteurs (jours)', 'plugin-wordpress-ia' ),
 			'context_section_max_tokens' => __( 'Taille maximale d’une section de document (tokens, appliquée à la prochaine indexation)', 'plugin-wordpress-ia' ),
+			'history_max_messages'    => __( 'Historique : nombre maximum de messages renvoyés au fournisseur', 'plugin-wordpress-ia' ),
+			'history_token_budget'    => __( 'Historique : budget maximal (tokens)', 'plugin-wordpress-ia' ),
 		);
 
 		foreach ( $fields as $key => $label ) {
@@ -138,6 +158,14 @@ class AdminSettings {
 				array( 'key' => $key )
 			);
 		}
+
+		add_settings_field(
+			'wpia_history_enabled',
+			__( 'Conserver l’historique', 'plugin-wordpress-ia' ),
+			array( $this, 'renderHistoryField' ),
+			'wpia_alert_settings',
+			'wpia_usage_settings'
+		);
 
 		add_settings_field(
 			'wpia_log_retention',
@@ -176,6 +204,16 @@ class AdminSettings {
 			esc_attr( $key ),
 			(int) $settings[ $key ]
 		);
+	}
+
+	public function renderHistoryField(): void {
+		$settings = self::get();
+		?>
+		<label>
+			<input type="checkbox" name="<?php echo esc_attr( self::OPTION_NAME ); ?>[history_enabled]" value="1" <?php checked( 1, (int) $settings['history_enabled'] ); ?> />
+			<?php esc_html_e( 'Envoyer les échanges précédents au fournisseur. Désactivé, chaque message est traité seul (réponses moins cohérentes, requêtes moins coûteuses).', 'plugin-wordpress-ia' ); ?>
+		</label>
+		<?php
 	}
 
 	public function renderRetentionField(): void {

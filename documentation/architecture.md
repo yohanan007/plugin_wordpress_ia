@@ -9,7 +9,7 @@
 - **Admin** (`AdminController`, `AdminSettings`) : pages IA Chatbot, réglages, documents, fournisseurs/comptes/chatbots, sécurité, journaux et limites.
 - **Domain** : objets métier fournisseur, compte API, chatbot, document, conversation, message et limite d’utilisation.
 - **Repository** : accès à `$wpdb` pour les entités ; `DatabaseInstaller` crée les tables et `MigrationManager` applique les évolutions de schéma.
-- **Services** : catalogue de fournisseurs, stockage des documents, chiffrement et rétention des journaux.
+- **Services** : catalogue de fournisseurs, génération IA (`Service/Ia`), limites de consommation (`Service/Usage`), indexation des documents (`Service/Document`), cadrage et prompt système (`Service/Prompt`), stockage des documents, chiffrement et rétention des journaux.
 - **Infrastructure** : activation/désactivation du plugin et gestion des migrations.
 
 ## Entrées WordPress et dépendances
@@ -24,6 +24,8 @@
 - Les tables métier relient fournisseur → compte API → chatbot ; les documents Markdown sont associés aux chatbots avec un ordre défini.
 - L’admin enregistre les secrets chiffrés en base et les documents chiffrés dans `uploads/wpia-private` ; ils sont déchiffrés uniquement lors de leur usage.
 - Le test de connexion récupère le compte et le fournisseur, déchiffre la clé, puis appelle l’API de modèles ; il ne génère pas de réponse IA.
-- Le schéma prévoit conversations et messages par chatbot/session, ainsi que des compteurs journaliers d’usage ; les dépôts existent, mais le traitement public du chat et l’application des limites ne sont pas implémentés.
-- Les documents sont contrôlés, stockés et rattachés au chatbot ; aucune vectorisation, recherche de contexte (RAG) ou injection de document dans une génération IA n’est active.
-- Les réglages de limites et d’affichage sont persistés, mais ne pilotent pas encore de flux de chat front-office.
+- La génération passe par `AiGenerationService` : `generate()` (un échange) et `generateChat()` (conversation avec historique, tronqué et réglable). Elle valide les messages, réserve la consommation auprès de `UsageLimiter` sur tout ce qui est envoyé, appelle le fournisseur puis normalise la réponse et ses compteurs de tokens, cache compris. Voir [generation-ia.md](generation-ia.md) et [limites.md](limites.md).
+- Les limites de consommation (site, visiteur, session) sont appliquées avant chaque génération ; les compteurs journaliers sont dans la table d’usage (schéma 1.2.0). Le schéma prévoit aussi conversations et messages, mais leur persistance n’est pas utilisée (issue 0004, facultative).
+- À l’import et à la réindexation, les documents sont découpés en sections chiffrées avec mots-clés hachés (table `wpia_document_section`, schéma 1.3.0). Ces sections ne sont pas encore injectées dans une génération : c’est l’objet de l’issue 006 lot B. Aucune vectorisation n’est prévue.
+- Le cadrage du chatbot (`PromptBuilder`, `CadrageValidator`) existe sous forme de classes pures, non encore branchées (issue 009).
+- Les réglages d’affichage sont persistés, mais ne pilotent pas encore de flux de chat front-office.

@@ -9,7 +9,7 @@ class ResponseNormalizer {
 
 	/**
 	 * @param array|\WP_Error $response
-	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int}}|\WP_Error
+	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int,cache_read_tokens?:int}}|\WP_Error
 	 */
 	public function normalize( string $provider, $response, string $configured_model, int $max_tokens ): array|\WP_Error {
 		if ( is_wp_error( $response ) ) {
@@ -145,10 +145,16 @@ class ResponseNormalizer {
 	}
 
 	/**
+	 * `input_tokens` compte TOUS les tokens d'entrée traités, cache compris, car c'est
+	 * ce que le limiteur doit voir. Anthropic les sépare (input_tokens exclut le cache) :
+	 * on additionne. Chez OpenAI, prompt_tokens inclut déjà les tokens en cache.
+	 * `cache_read_tokens` n'est présent que si le fournisseur le renvoie.
+	 *
 	 * @param array<string, mixed> $data
-	 * @return array{input_tokens:?int,output_tokens:?int,total_tokens:?int}
+	 * @return array{input_tokens:?int,output_tokens:?int,total_tokens:?int,cache_read_tokens?:int}
 	 */
 	private function extractUsage( string $provider, array $data ): array {
+		$cache_read = null;
 		if ( 'ollama' === $provider ) {
 			$input  = $data['prompt_eval_count'] ?? null;
 			$output = $data['eval_count'] ?? null;
@@ -156,16 +162,38 @@ class ResponseNormalizer {
 			$usage  = isset( $data['usage'] ) && is_array( $data['usage'] ) ? $data['usage'] : array();
 			$input  = $usage['input_tokens'] ?? $usage['prompt_tokens'] ?? null;
 			$output = $usage['output_tokens'] ?? $usage['completion_tokens'] ?? null;
+
+			if ( 'anthropic' === $provider ) {
+				$cache_read     = $this->tokenCount( $usage['cache_read_input_tokens'] ?? null );
+				$cache_creation = $this->tokenCount( $usage['cache_creation_input_tokens'] ?? null );
+				if ( is_numeric( $input ) && (int) $input >= 0 ) {
+					$input = (int) $input + ( $cache_read ?? 0 ) + ( $cache_creation ?? 0 );
+				}
+			} elseif ( isset( $usage['prompt_tokens_details'] ) && is_array( $usage['prompt_tokens_details'] ) ) {
+				$cache_read = $this->tokenCount( $usage['prompt_tokens_details']['cached_tokens'] ?? null );
+			}
 		}
 
-		$input  = is_numeric( $input ) && (int) $input >= 0 ? (int) $input : null;
-		$output = is_numeric( $output ) && (int) $output >= 0 ? (int) $output : null;
+		$input  = $this->tokenCount( $input );
+		$output = $this->tokenCount( $output );
 
-		return array(
+		$result = array(
 			'input_tokens'  => $input,
 			'output_tokens' => $output,
 			'total_tokens'  => null !== $input && null !== $output ? $input + $output : null,
 		);
+		if ( null !== $cache_read ) {
+			$result['cache_read_tokens'] = $cache_read;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * @param mixed $value
+	 */
+	private function tokenCount( $value ): ?int {
+		return is_numeric( $value ) && (int) $value >= 0 ? (int) $value : null;
 	}
 
 	private function error( string $code, string $message, int $status = 0 ): \WP_Error {

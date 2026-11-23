@@ -47,9 +47,12 @@ protection principale.
 
 ## Déroulé d'une génération
 
-1. **Estimation** E = `ceil( octets / 4 )` du prompt système et de la question,
-   plus `max_tokens` (plafond de sortie). C'est la même règle que la taille des
-   documents. Elle est volontairement prudente.
+1. **Estimation** E = `ceil( octets / 4 )` de **tout ce qui est envoyé** (prompt
+   système, historique conservé après troncature et question), plus
+   `max_tokens` (plafond de sortie). Elle est volontairement prudente. Un
+   historique long ou un prompt système volumineux (documents) augmentent donc
+   E : avec un prompt d'environ 4 000 tokens, les anciens défauts (10 000 par
+   jour, 4 096 par conversation) ne laissaient passer qu'une requête.
 2. **Réservation**, portée par portée (site, visiteur, session) :
    `INSERT IGNORE` de la ligne à 0, puis un `UPDATE` conditionnel qui ajoute E
    tokens et 1 message seulement si le plafond reste respecté. Cet `UPDATE` est
@@ -59,6 +62,8 @@ protection principale.
 3. **Appel** au fournisseur.
 4. **Confirmation** : le compteur reçoit l'écart (réel − E). Le réel est
    `usage.total_tokens`. Sans métrique fournisseur, l'estimation est conservée.
+   Ce total inclut les tokens lus ou écrits dans le cache de prompt (voir
+   [generation-ia.md](generation-ia.md)).
    Si l'entrée a été sous-estimée, le réel peut faire dépasser légèrement le
    plafond ; les requêtes suivantes sont alors refusées.
 5. **Échec** :
@@ -125,3 +130,15 @@ Clé unique `(chatbot_id, portee, identifiant, jour)` et index
 `(portee, date_maj)` pour la purge. L'ancienne table (clé chatbot/session, sans
 jour) n'était alimentée par aucun code : la migration la supprime si elle est
 vide, sinon elle la renomme en `{prefix}wpia_limite_utilisation_old_110`.
+
+## Valeurs par défaut
+
+| Réglage | Défaut |
+|---|---|
+| `daily_token_limit` (site, par jour) | 100 000 |
+| `max_tokens_conversation` (par session) | 40 000 |
+
+Ces défauts s'appliquent à toute installation qui n'a pas encore enregistré ses
+réglages ; les valeurs déjà enregistrées ne sont pas modifiées. L'enregistrement
+affiche un avertissement si `max_tokens_conversation` est inférieur à
+`max_tokens_request` + `history_token_budget`.
