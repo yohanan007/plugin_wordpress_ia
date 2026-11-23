@@ -51,11 +51,34 @@ accès direct au fichier. La limite d'envoi est de 2 Mo.
 
 Le bouton de test API appelle uniquement le point de terminaison de liste des
 modèles. Il ne demande pas de génération IA. Les tailles en tokens des
-documents sont des estimations. Le statut « prêt » signifie que le document a
-été découpé en sections et indexé (sans vectorisation). L'affichage public du
-chatbot et l'injection des documents dans les réponses ne sont pas encore
-fournis. Le réglage d'affichage et le template associé sont enregistrés
-pour préparer le rendu public, mais ne modifient pas encore le front-office.
+documents sont des estimations. L'affichage public du chatbot n'est pas encore
+fourni : le réglage d'affichage et le template associé sont enregistrés pour
+préparer le rendu public, mais ne modifient pas encore le front-office.
+
+## Documents et contexte de l'IA
+
+Chaque document Markdown importé est découpé **une seule fois**, à l'import et au
+bouton « Réindexer », en sections chiffrées (sans vectorisation). Le statut
+« Indexé » signifie que ce découpage a réussi. Après une mise à jour du plugin
+qui change le schéma ou la normalisation des mots-clés, les documents repassent
+en « En attente » : il faut alors les réindexer.
+
+À chaque question, le prompt système est assemblé côté serveur en quatre blocs :
+règles fixes du plugin, consignes de l'administrateur, **contexte**, **documents**.
+
+- Un document associé au chatbot a un rôle, choisi sur la page « Documents » :
+  **Contexte** (court, toujours envoyé en entier) ou **Complet** (la base de
+  connaissances détaillée, par exemple un CV).
+- Si les documents complets tiennent dans le budget (réglage « budget total
+  envoyé à l'IA », 6 000 tokens par défaut), ils sont envoyés en entier. Sinon,
+  seules les sections liées à la question sont envoyées.
+- Le contexte est limité (1 500 tokens par défaut) : un dépassement provoqué par
+  l'administrateur est refusé, il n'est jamais tronqué.
+- Le contenu des documents est échappé et traité comme une donnée, jamais comme une
+  instruction.
+
+La page « Documents » affiche la répartition du budget et le mode prévu. Voir
+`documentation/contexte.md`.
 
 Les journaux sont purgés par WP-Cron après 7 ou 30 jours, selon le choix
 hebdomadaire ou mensuel. Comme tout événement WP-Cron, l'exécution dépend de
@@ -68,7 +91,16 @@ conversation avec historique (`generateChat()`) au fournisseur configuré. Chaqu
 génération est soumise à des limites de consommation (budget journalier du site,
 messages par visiteur, tokens par conversation) appliquées avant l'appel. Les
 réglages de la section « Limites » permettent aussi de choisir si l'historique
-est renvoyé au fournisseur, et sa taille. Voir `documentation/generation-ia.md`
-et `documentation/limites.md`.
+est renvoyé au fournisseur, et sa taille. L'estimation des limites porte sur le
+prompt complet, documents compris. Voir `documentation/generation-ia.md` et
+`documentation/limites.md`.
+
+## Tests
+
+```sh
+php tests/run.php
+```
+
+Les tests s'exécutent sans WordPress.
 
 L'avancement des évolutions est suivi dans `docs/issues/README.md`.

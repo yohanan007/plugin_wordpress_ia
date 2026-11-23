@@ -14,6 +14,8 @@ use WPIA\Repository\FournisseurIARepository;
 use WPIA\Repository\LimiteUtilisationRepository;
 use WPIA\Repository\LogRepository;
 use WPIA\Service\Ia\AIProviderCatalog;
+use WPIA\Domain\ChatbotDocument;
+use WPIA\Service\Document\ContextBudget;
 use WPIA\Service\Document\DocumentIndexer;
 use WPIA\Service\Document\DocumentStorage;
 use WPIA\Service\Securite\SecretCipher;
@@ -75,6 +77,7 @@ class AdminController {
 		add_action( 'admin_post_wpia_reindex_document', array( $this, 'reindexDocument' ) );
 		add_action( 'admin_post_wpia_move_document', array( $this, 'moveDocument' ) );
 		add_action( 'admin_post_wpia_assign_document', array( $this, 'assignDocument' ) );
+		add_action( 'admin_post_wpia_set_document_role', array( $this, 'setDocumentRole' ) );
 		add_action( 'admin_post_wpia_delete_log', array( $this, 'deleteLog' ) );
 	}
 
@@ -326,6 +329,23 @@ class AdminController {
 		} catch ( \RuntimeException $exception ) {
 			$pending = 0;
 		}
+		// Tokens par document associé (sections prêtes) : jauge et rôles.
+		$par_document = array();
+		$budget_info  = ContextBudget::resume( 0, 0, 0, 0 );
+		if ( $bot_id > 0 ) {
+			try {
+				$par_document = ( new DocumentSectionRepository( $wpdb ) )->tokensByChatbot( $bot_id );
+			} catch ( \RuntimeException $exception ) {
+				$par_document = array();
+			}
+			$totaux      = ContextBudget::totaux( $par_document );
+			$reglages    = AdminSettings::get();
+			$budget_info = ContextBudget::resume( $totaux['contexte'], $totaux['complet'], (int) $reglages['context_token_budget'], (int) $reglages['context_fixed_max_tokens'] );
+		}
+		$roles = array();
+		foreach ( $ordered as $association ) {
+			$roles[ (int) $association['document_id'] ] = ChatbotDocument::isValidRole( $association['role'] ?? null ) ? $association['role'] : ChatbotDocument::ROLE_COMPLET;
+		}
 		// document_id => position (à partir de 1) dans le chatbot actif. Un document
 		// absent de cette table n'est pas associé au chatbot.
 		$order_map = array();
@@ -348,6 +368,9 @@ class AdminController {
 					);
 					?>
 				</p></div>
+			<?php endif; ?>
+			<?php if ( $bot_id > 0 ) : ?>
+				<?php $this->renderContextGauge( $budget_info, (int) AdminSettings::get()['context_fixed_max_tokens'] ); ?>
 			<?php endif; ?>
 			<p><?php esc_html_e( 'Les fichiers sont chiffrés sur le disque et ne sont pas servis comme des documents Markdown publics. Leur contenu est lu côté serveur uniquement.', 'plugin-wordpress-ia' ); ?></p>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" enctype="multipart/form-data">
@@ -382,11 +405,12 @@ class AdminController {
 					<th><?php esc_html_e( 'Indexation', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Sections', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Priorité', 'plugin-wordpress-ia' ); ?></th>
+					<th><?php esc_html_e( 'Rôle', 'plugin-wordpress-ia' ); ?></th>
 					<th><?php esc_html_e( 'Actions', 'plugin-wordpress-ia' ); ?></th>
 				</tr></thead>
 				<tbody>
 					<?php if ( empty( $rows ) ) : ?>
-						<tr><td colspan="7"><?php esc_html_e( 'Aucun document trouvé.', 'plugin-wordpress-ia' ); ?></td></tr>
+						<tr><td colspan="8"><?php esc_html_e( 'Aucun document trouvé.', 'plugin-wordpress-ia' ); ?></td></tr>
 					<?php endif; ?>
 					<?php foreach ( $rows as $row ) : ?>
 						<tr>
@@ -396,6 +420,13 @@ class AdminController {
 							<td><?php echo esc_html( $this->documentStatusLabel( (string) $row['statut_indexation'] ) ); ?></td>
 							<td><?php echo esc_html( (string) ( $section_counts[ (int) $row['id'] ] ?? 0 ) ); ?></td>
 							<td><?php echo isset( $order_map[ (int) $row['id'] ] ) ? esc_html( (string) $order_map[ (int) $row['id'] ] ) : esc_html__( 'Non associé', 'plugin-wordpress-ia' ); ?></td>
+							<td>
+								<?php if ( $bot_id > 0 && isset( $order_map[ (int) $row['id'] ] ) ) : ?>
+									<?php $this->renderRoleForm( (int) $row['id'], $roles[ (int) $row['id'] ] ?? ChatbotDocument::ROLE_COMPLET ); ?>
+								<?php else : ?>
+									&mdash;
+								<?php endif; ?>
+							</td>
 							<td>
 								<?php // Document associé : boutons Monter / Descendre ; sinon : bouton Associer. ?>
 								<?php if ( $bot_id > 0 && isset( $order_map[ (int) $row['id'] ] ) ) : ?>
@@ -425,7 +456,7 @@ class AdminController {
 				)
 			);
 			?>
-			<p><?php esc_html_e( 'La taille en tokens est une estimation (environ 4 caractères par token). Le statut « Indexé » indique que le document a été découpé par titres en sections chiffrées. La transmission de ces sections à l’IA n’est pas encore active.', 'plugin-wordpress-ia' ); ?></p>
+			<p><?php esc_html_e( 'La taille en tokens est une estimation (environ 4 caractères par token). Le statut « Indexé » indique que le document a été découpé par titres en sections chiffrées. Seuls les documents indexés, actifs et associés au chatbot sont transmis à l’IA. Un document « Contexte » est toujours envoyé en entier ; un document « Complet » est envoyé en entier s’il tient dans le budget, sinon par sections choisies selon la question.', 'plugin-wordpress-ia' ); ?></p>
 		</div>
 		<?php
 	}
@@ -1108,11 +1139,77 @@ class AdminController {
 				$this->redirect( self::PAGE_DOCUMENTS, 'document_not_found' );
 			}
 
-			( new ChatbotDocumentRepository( $wpdb ) )->append( (int) $ids['chatbot_id'], $id );
+			$role = sanitize_key( $this->requestString( $_POST, 'role' ) );
+			if ( '' === $role ) {
+				$role = ChatbotDocument::ROLE_COMPLET;
+			}
+			if ( ! ChatbotDocument::isValidRole( $role ) ) {
+				$this->redirect( self::PAGE_DOCUMENTS, 'document_failed' );
+			}
+			if ( ChatbotDocument::ROLE_CONTEXTE === $role ) {
+				$this->assertContextAccepts( (int) $ids['chatbot_id'], $id );
+			}
+
+			( new ChatbotDocumentRepository( $wpdb ) )->append( (int) $ids['chatbot_id'], $id, $role );
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_assigned' );
 		} catch ( RuntimeException | InvalidArgumentException $exception ) {
 			$this->log( 'error', 'document', $exception->getMessage() );
 			$this->redirect( self::PAGE_DOCUMENTS, 'document_failed' );
+		}
+	}
+
+	/**
+	 * Change le rôle (Contexte / Complet) d'un document associé au chatbot actif.
+	 * Passer en « Contexte » est refusé si le contexte dépasserait sa limite : il
+	 * n'est jamais tronqué, donc le refus se fait ici, à l'action de l'admin.
+	 */
+	public function setDocumentRole(): void {
+		$this->authorize();
+		$id = absint( $this->requestString( $_POST, 'document_id' ) );
+		check_admin_referer( 'wpia_set_document_role_' . $id );
+		$role = sanitize_key( $this->requestString( $_POST, 'role' ) );
+		$ids  = $this->getConfigurationIds();
+		if ( $id < 1 || empty( $ids['chatbot_id'] ) ) {
+			$this->redirect( self::PAGE_DOCUMENTS, 'no_chatbot' );
+		}
+		if ( ! ChatbotDocument::isValidRole( $role ) ) {
+			$this->redirect( self::PAGE_DOCUMENTS, 'document_failed' );
+		}
+
+		try {
+			global $wpdb;
+			$associations = new ChatbotDocumentRepository( $wpdb );
+			if ( ! $associations->hasDocument( (int) $ids['chatbot_id'], $id ) ) {
+				$this->redirect( self::PAGE_DOCUMENTS, 'document_not_found' );
+			}
+			if ( ChatbotDocument::ROLE_CONTEXTE === $role ) {
+				$this->assertContextAccepts( (int) $ids['chatbot_id'], $id );
+			}
+			$associations->setRole( (int) $ids['chatbot_id'], $id, $role );
+			$this->redirect( self::PAGE_DOCUMENTS, 'role_saved' );
+		} catch ( RuntimeException | InvalidArgumentException $exception ) {
+			$this->log( 'error', 'document', $exception->getMessage() );
+			$this->redirect( self::PAGE_DOCUMENTS, 'document_failed' );
+		}
+	}
+
+	/**
+	 * Redirige avec un message si le document ne peut pas rejoindre le contexte :
+	 * pas encore indexé (taille inconnue) ou contexte au-delà de sa limite.
+	 */
+	private function assertContextAccepts( int $chatbot_id, int $document_id ): void {
+		global $wpdb;
+		$sections = new DocumentSectionRepository( $wpdb );
+		$tokens   = $sections->tokensForDocument( $document_id );
+		if ( $tokens < 1 ) {
+			$this->redirect( self::PAGE_DOCUMENTS, 'context_not_indexed' );
+		}
+
+		$autres = $sections->tokensByChatbot( $chatbot_id );
+		unset( $autres[ $document_id ] );
+		$actuel = ContextBudget::totaux( $autres )['contexte'];
+		if ( ! ContextBudget::accepteContexte( $actuel, $tokens, (int) AdminSettings::get()['context_fixed_max_tokens'] ) ) {
+			$this->redirect( self::PAGE_DOCUMENTS, 'context_too_long' );
 		}
 	}
 
@@ -1376,6 +1473,9 @@ class AdminController {
 			'document_not_found'       => array( 'error', __( 'Document introuvable.', 'plugin-wordpress-ia' ) ),
 			'priority_saved'           => array( 'success', __( 'Priorité documentaire mise à jour.', 'plugin-wordpress-ia' ) ),
 			'document_assigned'        => array( 'success', __( 'Document associé au chatbot.', 'plugin-wordpress-ia' ) ),
+			'role_saved'               => array( 'success', __( 'Rôle du document mis à jour.', 'plugin-wordpress-ia' ) ),
+			'context_too_long'         => array( 'error', __( 'Le contexte doit rester court ; placez le détail dans un document complet.', 'plugin-wordpress-ia' ) ),
+			'context_not_indexed'      => array( 'error', __( 'Indexez le document avant d’en faire un contexte : sa taille est inconnue.', 'plugin-wordpress-ia' ) ),
 			'no_chatbot'               => array( 'error', __( 'Configurez un chatbot avant de modifier les priorités.', 'plugin-wordpress-ia' ) ),
 			'log_deleted'              => array( 'success', __( 'Journal supprimé.', 'plugin-wordpress-ia' ) ),
 			'log_not_found'            => array( 'error', __( 'Journal introuvable.', 'plugin-wordpress-ia' ) ),
@@ -1436,8 +1536,94 @@ class AdminController {
 			<input type="hidden" name="action" value="wpia_assign_document" />
 			<input type="hidden" name="document_id" value="<?php echo esc_attr( (string) $id ); ?>" />
 			<?php wp_nonce_field( 'wpia_assign_document_' . $id ); ?>
+			<label class="screen-reader-text" for="wpia-assign-role-<?php echo esc_attr( (string) $id ); ?>"><?php esc_html_e( 'Rôle', 'plugin-wordpress-ia' ); ?></label>
+			<select id="wpia-assign-role-<?php echo esc_attr( (string) $id ); ?>" name="role">
+				<option value="complet"><?php esc_html_e( 'Complet', 'plugin-wordpress-ia' ); ?></option>
+				<option value="contexte"><?php esc_html_e( 'Contexte', 'plugin-wordpress-ia' ); ?></option>
+			</select>
 			<button class="button button-small" type="submit"><?php esc_html_e( 'Associer au chatbot', 'plugin-wordpress-ia' ); ?></button>
 		</form>
+		<?php
+	}
+
+	/**
+	 * Sélecteur de rôle d'un document associé.
+	 */
+	private function renderRoleForm( int $id, string $role ): void {
+		?>
+		<form class="wpia-inline-form" method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+			<input type="hidden" name="action" value="wpia_set_document_role" />
+			<input type="hidden" name="document_id" value="<?php echo esc_attr( (string) $id ); ?>" />
+			<?php wp_nonce_field( 'wpia_set_document_role_' . $id ); ?>
+			<label class="screen-reader-text" for="wpia-role-<?php echo esc_attr( (string) $id ); ?>"><?php esc_html_e( 'Rôle', 'plugin-wordpress-ia' ); ?></label>
+			<select id="wpia-role-<?php echo esc_attr( (string) $id ); ?>" name="role">
+				<option value="complet" <?php selected( $role, 'complet' ); ?>><?php esc_html_e( 'Complet', 'plugin-wordpress-ia' ); ?></option>
+				<option value="contexte" <?php selected( $role, 'contexte' ); ?>><?php esc_html_e( 'Contexte', 'plugin-wordpress-ia' ); ?></option>
+			</select>
+			<button class="button button-small" type="submit"><?php esc_html_e( 'Appliquer', 'plugin-wordpress-ia' ); ?></button>
+		</form>
+		<?php
+	}
+
+	/**
+	 * Jauge en trois segments (contexte, documents complets, place restante), mode
+	 * prévu, et avertissement non bloquant si le contexte dépasse sa limite
+	 * (réindexation ou réglage abaissé : il est quand même envoyé en entier).
+	 *
+	 * @param array<string, mixed> $r Résultat de ContextBudget::resume().
+	 */
+	private function renderContextGauge( array $r, int $contexte_max ): void {
+		$pct    = static function ( int $valeur ) use ( $r ): string {
+			return number_format( 100 * $valeur / (int) $r['echelle'], 2, '.', '' );
+		};
+		$modes  = array(
+			'aucun'     => __( 'Aucun document ne sera transmis.', 'plugin-wordpress-ia' ),
+			'complet'   => __( 'Mode complet : tous les documents sont transmis en entier.', 'plugin-wordpress-ia' ),
+			'selection' => __( 'Mode sélection : les documents complets dépassent le budget, seules les sections liées à la question sont transmises.', 'plugin-wordpress-ia' ),
+		);
+		?>
+		<div class="wpia-gauge-block">
+			<?php if ( $r['contexte_depasse'] ) : ?>
+				<div class="notice notice-warning inline"><p>
+					<?php
+					echo esc_html(
+						sprintf(
+							/* translators: 1: context tokens, 2: limit. */
+							__( 'Le contexte fait %1$d tokens pour une limite de %2$d. Il est tout de même envoyé en entier, mais il réduit la place des documents complets : raccourcissez-le ou déplacez le détail dans un document complet.', 'plugin-wordpress-ia' ),
+							(int) $r['contexte'],
+							$contexte_max
+						)
+					);
+					?>
+				</p></div>
+			<?php endif; ?>
+			<?php if ( $r['budget_insuffisant'] ) : ?>
+				<div class="notice notice-warning inline"><p>
+					<?php esc_html_e( 'Le contexte occupe tout le budget : aucun document complet n’est transmis. Augmentez le budget total dans les réglages ou raccourcissez le contexte.', 'plugin-wordpress-ia' ); ?>
+				</p></div>
+			<?php endif; ?>
+			<div class="wpia-gauge" role="img" aria-label="<?php esc_attr_e( 'Répartition du budget de tokens des documents', 'plugin-wordpress-ia' ); ?>">
+				<span class="wpia-gauge-contexte" style="width:<?php echo esc_attr( $pct( (int) $r['contexte'] ) ); ?>%"></span>
+				<span class="wpia-gauge-complet" style="width:<?php echo esc_attr( $pct( (int) $r['complet_envoye'] ) ); ?>%"></span>
+				<span class="wpia-gauge-libre" style="width:<?php echo esc_attr( $pct( (int) $r['libre'] ) ); ?>%"></span>
+			</div>
+			<p class="description">
+				<?php
+				echo esc_html(
+					sprintf(
+						/* translators: 1: context tokens, 2: sent full documents tokens, 3: total full documents tokens, 4: free tokens, 5: budget. */
+						__( 'Contexte : %1$d · Documents complets transmis : %2$d sur %3$d · Libre : %4$d · Budget : %5$d tokens.', 'plugin-wordpress-ia' ),
+						(int) $r['contexte'],
+						(int) $r['complet_envoye'],
+						(int) $r['complet'],
+						(int) $r['libre'],
+						(int) $r['budget']
+					)
+				);
+				?>
+				<?php echo esc_html( $modes[ $r['mode'] ] ?? '' ); ?>
+			</p>
+		</div>
 		<?php
 	}
 
