@@ -140,6 +140,7 @@ class DatabaseInstaller {
 				chatbot_id bigint(20) unsigned NOT NULL,
 				document_id bigint(20) unsigned NOT NULL,
 				ordre int(10) unsigned NOT NULL DEFAULT 0,
+				role varchar(20) NOT NULL DEFAULT 'complet',
 				PRIMARY KEY  (id),
 				UNIQUE KEY chatbot_document (chatbot_id,document_id),
 				KEY document_id (document_id)

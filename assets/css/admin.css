@@ -223,3 +223,25 @@
 		width: 40%;
 	}
 }
+
+.wpia-gauge {
+	display: flex;
+	height: 14px;
+	max-width: 520px;
+	overflow: hidden;
+	background: #f0f0f1;
+	border: 1px solid var(--wpia-border);
+	border-radius: 3px;
+}
+
+.wpia-gauge-contexte {
+	background: #2271b1;
+}
+
+.wpia-gauge-complet {
+	background: #72aee6;
+}
+
+.wpia-gauge-libre {
+	background: transparent;
+}

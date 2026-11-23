@@ -270,3 +270,74 @@ Tâches 1 à 6 faites. Écarts et précisions par rapport à la spécification :
 - **Suppression d'un document :** retire aussi ses sections.
 - **Tests :** 9 nouveaux (49 au total).
 - **Reste à faire pour le lot B :** colonne `role`, `ContextBuilder`, `PromptAssembler`, version du contexte, jauge. La méthode `getKey()` de `SecretCipher` reste privée ; seules les clés dérivées sont exposées.
+
+---
+---
+
+# Avancement du 2026-11-23 : lot B1 livré (données et réglages)
+
+Tâche 7 faite :
+
+- **Migration 1.4.0 :** colonne `wpia_chatbot_document.role` (`varchar(20) NOT NULL DEFAULT 'complet'`), ajoutée par `dbDelta`. Les associations existantes deviennent `complet`.
+- **Validation du rôle :** `ChatbotDocument::ROLE_CONTEXTE`, `ROLE_COMPLET`, `isValidRole()` et `setRole()`.
+- **Dépôt :** `getOrderedDocuments()` renvoie le rôle ; `append()` accepte un rôle ; nouveau `setRole()`. `replaceOrder()` supprimait puis réinsérait les lignes : il conserve désormais le rôle de chaque association.
+- **Réglages :** `context_token_budget` (6000, de 500 à 100000) et `context_fixed_max_tokens` (1500, de 100 à 20000), affichés dans les réglages.
+- **Tests :** 2 nouveaux (77 au total).
+- **Reste à faire :** B2 (`ContextBuilder`), B3 (`PromptAssembler`, version du contexte), B4 (admin, documentation).
+
+---
+---
+
+# Avancement du 2026-11-23 : lot B2 livré (`ContextBuilder`)
+
+Tâche 8 faite : `src/Service/Document/ContextBuilder.php`, avec `construire( $chatbot_id, $question, $budget = null )`.
+
+- **Lecture :** une seule requête, `DocumentSectionRepository::getForChatbot()`, qui joint associations, documents et sections (documents actifs et `ready`, ordre des associations puis des sections). Aucun accès à `DocumentStorage`. Seules les sections envoyées sont déchiffrées.
+- **Retour :** `{contexte, complet, mode, tokens:{contexte,complet}, sections, avec_documents}`. Les deux clés `mode` (`aucun`, `complet`, `selection`) et `avec_documents` sont des ajouts à la spécification : B3 s'en sert pour choisir la variante de règles de `PromptBuilder`.
+- **Sélection :** score = termes de la question présents dans `mots_cles` + 2 par terme présent dans le titre. Les sections de score nul ne sont jamais envoyées. À score égal, l'ordre du document décide. Une section trop grosse pour le budget est sautée, une plus petite peut encore entrer.
+- **Budget :** compté sur les tokens des sections (texte échappé). Les balises `<section …>` ne sont pas comptées (quelques tokens par section).
+- **Section illisible :** ignorée et journalisée sans contenu, plutôt que de faire échouer la réponse.
+- **Tests :** 5 nouveaux (82 au total).
+- **Reste à faire :** B3 (`PromptAssembler`, branchement dans `buildSystem()`, version du contexte), B4 (admin, documentation).
+
+---
+---
+
+# Avancement du 2026-11-23 : lot B3 livré (assemblage et branchement)
+
+Tâches 9 et 10 faites.
+
+- **`PromptAssembler`** (`src/Service/Prompt/`) : appelle `ContextBuilder` puis `PromptBuilder` (avec `avec_documents` issu du contexte), et renvoie `{systeme:{stable,variable}, releve}`. Mode complet : `stable` = [1] à [4]. Mode sélection : `stable` = [1] à [3], `variable` = [4]. Les blocs vides sont omis.
+- **Branchement :** `AiGenerationService::buildSystem()` utilise l'assembleur (injectable par le constructeur, créé à la demande sinon : la dérivation des clés peut échouer). Si l'assemblage échoue, la requête est refusée (`wpia_configuration_error`), jamais envoyée sans les règles ni les documents.
+- **Relevé :** mode, version, tokens par bloc et identifiants de sections, journalisé (catégorie `prompt`) sans aucun contenu à chaque question. Un échec de journalisation ne bloque pas la réponse.
+- **Version du contexte : écart avec la spécification.** `ContextVersion::calculer()` est une fonction pure, **calculée à la demande** et non stockée dans l'option `wpia_context_version_<id>`. Aucun événement à intercepter (import, suppression, réindexation, rôle, ordre, chatbot, réglages), donc aucun risque de version périmée. Coût : une requête de plus par question (`ChatbotDocumentRepository::getReadyDocuments()`). Elle est dans le relevé, et 011 pourra l'utiliser telle quelle. Si un stockage devient nécessaire, il suffira d'y écrire cette valeur.
+- **Contenu de la version :** `PromptBuilder::VERSION`, `KeywordNormalizer::VERSION`, sujet, ton, langue, consignes, marqueur, liste ordonnée (hash, rôle) des documents `ready` et actifs, et les trois réglages de budget.
+- **Estimation des limites :** elle porte désormais sur le prompt complet, plus long qu'avant (environ 400 tokens de règles). Les tests du service et des limites utilisent un assembleur de remplacement pour garder leurs chiffres.
+- **Tests :** 5 nouveaux (87 au total).
+- **Reste à faire :** B4 (sélecteur de rôle, jauge, refus ou avertissement sur le contexte trop long, `documentation/contexte.md`) et la reformulation de `claude.md` par Yohanan.
+
+---
+---
+
+# Avancement du 2026-11-23 : lot B4 livré (admin et documentation)
+
+Tâches 11 et 12 faites. Le lot B est complet.
+
+- **Rôle :** colonne « Rôle » sur la page « Documents » (sélecteur Complet / Contexte, action `wpia_set_document_role`, nonce lié au document). Le formulaire d'association propose aussi le rôle.
+- **Contrôle bloquant :** passer un document en « Contexte » (changement de rôle ou association) est refusé si le contexte dépasserait `context_fixed_max_tokens` : « Le contexte doit rester court ; placez le détail dans un document complet ». Un document non indexé est refusé aussi (taille inconnue).
+- **Avertissement non bloquant :** si le contexte dépasse déjà sa limite (réindexation, réglage abaissé), la page l'affiche. Le contexte reste envoyé en entier.
+- **Jauge :** trois segments (contexte, documents complets transmis, place restante), chiffres et mode prévu (aucun, complet, sélection). Calculs dans `ContextBudget` (pure, testée) ; requêtes `DocumentSectionRepository::tokensByChatbot()` et `tokensForDocument()`.
+- **Texte de la page :** l'avertissement « la transmission à l'IA n'est pas encore active » est remplacé.
+- **Documentation :** `documentation/contexte.md` ; mises à jour de `architecture.md` et `prompt-cadrage.md`, devenues fausses.
+- **Tests :** 2 nouveaux (89 au total). Les formulaires et les actions de `AdminController` ne sont pas couverts : le harnais n'a pas WordPress. À vérifier à la main (voir le compte rendu).
+- **Reste à faire :** la reformulation de `claude.md` sur le mode complet (Yohanan, fichier protégé, voir le README des issues).
+
+---
+---
+
+# Correctifs de revue du 2026-11-23
+
+- **Version du contexte :** `ContextVersion::calculer()` reçoit aussi le nom du site, et la désignation de chaque document entre dans l'empreinte (elle figure dans `document="…"`). Renommer le site ou un document change la version.
+- **Rôle d'un document non associé :** `setDocumentRole` vérifie l'association (`ChatbotDocumentRepository::hasDocument()`) et répond « Document introuvable » au lieu d'un faux succès. Le contrôle ne se fait pas sur le nombre de lignes modifiées : MySQL renvoie 0 aussi quand le rôle ne change pas.
+- **Budgets incohérents :** avertissement non bloquant sur la page « Documents » quand le contexte occupe tout le budget (`budget_insuffisant`), et à l'enregistrement des réglages quand `context_fixed_max_tokens` dépasse `context_token_budget`.
+- **Tests :** version (site, désignation) et jauge ; 89 tests passent. Les actions de `AdminController` restent à vérifier à la main.
