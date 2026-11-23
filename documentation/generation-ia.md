@@ -27,6 +27,63 @@ limites de consommation : `visiteur` (identifiant déjà pseudonymisé, calculé
 défaut depuis la requête) et `session` (jeton brut de conversation, haché avant
 stockage). Les limites sont décrites dans [limites.md](limites.md).
 
+## Conversation multi-tours
+
+`generate()` fait un seul échange. Pour envoyer un historique, utiliser
+`generateChat()` :
+
+```php
+$result = $service->generateChat(
+	array(
+		'messages'  => array(
+			array( 'role' => 'user', 'content' => 'Quelles sont ses compétences ?' ),
+			array( 'role' => 'assistant', 'content' => 'PHP, JavaScript…' ),
+			array( 'role' => 'user', 'content' => 'Et en base de données ?' ), // la question, toujours en dernier
+		),
+		'chatbot_id' => 1,                                   // facultatif : doit être le chatbot actif
+		'identites'  => array( 'visiteur' => 'u:7', 'session' => $jeton ), // comme `$contexte` de generate()
+	)
+);
+```
+
+- **Validation** : rôles `user` et `assistant` uniquement, contenu non vide, dernier
+  message `user`, 40 messages et 8 000 caractères par message au plus. Sinon,
+  `wpia_invalid_request` sans appel ni réservation. Le prompt système n'est
+  jamais reçu de l'appelant : il est construit par le serveur.
+- **Historique** : tous les messages sauf le dernier. Réglages de la section
+  consommation : `history_enabled` (désactivé, seule la question est envoyée),
+  `history_max_messages` (6 par défaut) et `history_token_budget` (1 500 par
+  défaut). La troncature se fait toujours au début, deux messages à la fois, et
+  le premier message conservé est un message `user`. La question n'est jamais
+  tronquée.
+- **Alternance** : deux messages consécutifs de même rôle sont fusionnés
+  (séparés par une ligne vide).
+- **Ordre envoyé** : prompt système (partie stable, puis partie variable),
+  historique, question. Le plus stable vient en premier, car les fournisseurs qui
+  mettent le prompt en cache (OpenAI, Anthropic) s'appuient sur le préfixe commun
+  entre deux requêtes.
+- **Limites** : la réservation porte sur tout ce qui est envoyé, historique
+  conservé compris (voir [limites.md](limites.md)).
+
+### Cache de prompt
+
+- **Anthropic** : quand la partie stable du prompt système dépasse 1 024 tokens
+  estimés, `system` est envoyé en blocs : le bloc stable porte
+  `cache_control: {type: "ephemeral"}` et le bloc variable, s'il existe, le suit.
+  Sinon, `system` reste une chaîne (corps identique à l'ancien). Sous le minimum
+  propre au modèle (512 à 4 096 tokens selon le modèle), l'API ignore le marquage
+  sans erreur : le seuil de 1 024 sert seulement à ne pas marquer les petits
+  prompts. À revoir si les modèles configurés changent.
+- **OpenAI et autres** : rien à faire, le cache d'OpenAI est automatique ; la
+  partie stable est placée en premier pour former un préfixe commun.
+- **Comptage** : `usage.input_tokens` contient **tous** les tokens d'entrée
+  traités. Anthropic les sépare (`input_tokens` exclut le cache) : le service
+  additionne `input_tokens`, `cache_creation_input_tokens` et
+  `cache_read_input_tokens`. Chez OpenAI, `prompt_tokens` inclut déjà
+  `cached_tokens`. `usage.cache_read_tokens` est ajouté quand le fournisseur le
+  renvoie. Le limiteur compte des tokens, pas un coût : lire dans le cache ne
+  réduit pas la consommation comptée.
+
 ## Flux et paramètres
 
 1. Le service charge les identifiants de fournisseur, compte API et chatbot de
@@ -82,6 +139,6 @@ Lancer la suite autonome sans dépendance de test externe avec :
 php tests/run.php
 ```
 
-Elle couvre les cinq formats de requête, la normalisation des succès et les
+Elle couvre les cinq formats de requête (corps identique à l'ancien pour un seul message, historique, troncature, fusion des rôles), la normalisation des succès et les
 erreurs réseau, timeout, authentification, structure/JSON, contenu vide,
 limite de sortie et absence de clé.

@@ -51,12 +51,24 @@ accès direct au fichier. La limite d'envoi est de 2 Mo.
 
 Le bouton de test API appelle uniquement le point de terminaison de liste des
 modèles. Il ne demande pas de génération IA. Les tailles en tokens des
-documents sont des estimations et le statut « prêt » signifie que le texte est
-validé, pas vectorisé. L'affichage public du chatbot, l'application effective
-des limites, la vectorisation et le RAG ne sont pas fournis par cette
-administration. Le réglage d'affichage et le template associé sont enregistrés
+documents sont des estimations. Le statut « prêt » signifie que le document a
+été découpé en sections et indexé (sans vectorisation). L'affichage public du
+chatbot et l'injection des documents dans les réponses ne sont pas encore
+fournis. Le réglage d'affichage et le template associé sont enregistrés
 pour préparer le rendu public, mais ne modifient pas encore le front-office.
 
 Les journaux sont purgés par WP-Cron après 7 ou 30 jours, selon le choix
 hebdomadaire ou mensuel. Comme tout événement WP-Cron, l'exécution dépend de
 l'activité du site ; la conservation « jamais » désactive la purge automatique.
+
+## Génération IA et limites
+
+Le service `AiGenerationService` envoie une question (`generate()`) ou une
+conversation avec historique (`generateChat()`) au fournisseur configuré. Chaque
+génération est soumise à des limites de consommation (budget journalier du site,
+messages par visiteur, tokens par conversation) appliquées avant l'appel. Les
+réglages de la section « Limites » permettent aussi de choisir si l'historique
+est renvoyé au fournisseur, et sa taille. Voir `documentation/generation-ia.md`
+et `documentation/limites.md`.
+
+L'avancement des évolutions est suivi dans `docs/issues/README.md`.

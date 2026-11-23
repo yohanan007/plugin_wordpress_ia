@@ -150,6 +150,14 @@ function apply_filters( string $hook, $value ) {
 	return $value;
 }
 
+function wp_unslash( $value ) {
+	return $value;
+}
+
+function add_settings_error( string $setting, string $code, string $message, string $type = 'error' ): void {
+	$GLOBALS['wpia_settings_errors'][] = array( 'code' => $code, 'type' => $type );
+}
+
 spl_autoload_register(
 	static function ( string $class ): void {
 		$prefix = 'WPIA\\';
@@ -1237,5 +1245,362 @@ $run(
 	}
 );
 
-assertSameValue( 51, $tests, 'total passing test count' );
+
+// ---------------------------------------------------------------------------
+// Génération multi-tours (issue 008, lot A).
+// ---------------------------------------------------------------------------
+
+/**
+ * Prépare un fournisseur actif et capture le corps JSON de la requête HTTP.
+ *
+ * @return object{calls:int,payload:array<string,mixed>,body:string}
+ */
+function chatFixture( string $type, array $settings = array() ): object {
+	limitSettings( array_merge( array( 'daily_token_limit' => 100000, 'max_tokens_conversation' => 100000, 'max_messages_user' => 100 ), $settings ) );
+	$GLOBALS['wpdb']->rows = serviceRows( $type );
+	$GLOBALS['wpia_options']['wpia_active_configuration'] = array(
+		'provider_type' => $type,
+		'provider_id'   => 1,
+		'account_id'    => 1,
+		'chatbot_id'    => 1,
+	);
+	$capture = new class() {
+		public int $calls = 0;
+		public array $payload = array();
+		public string $body = '';
+	};
+	$GLOBALS['wpia_http_callback'] = static function ( string $url, array $args ) use ( $capture, $type ): array {
+		++$capture->calls;
+		$capture->body    = $args['body'];
+		$capture->payload = json_decode( $args['body'], true );
+		$text = array( 'type' => 'text', 'text' => 'ok' );
+		$body = 'anthropic' === $type
+			? array( 'content' => array( $text ), 'usage' => array( 'input_tokens' => 5, 'output_tokens' => 3 ) )
+			: ( 'ollama' === $type
+				? array( 'message' => array( 'content' => 'ok' ), 'prompt_eval_count' => 5, 'eval_count' => 3 )
+				: array( 'choices' => array( array( 'message' => array( 'content' => 'ok' ) ) ), 'usage' => array( 'prompt_tokens' => 5, 'completion_tokens' => 3 ) ) );
+
+		return response( 200, json_encode( $body ) );
+	};
+
+	return $capture;
+}
+
+/** Messages de la conversation, sans le message system, pour n'importe quel fournisseur. */
+function sentMessages( array $payload ): array {
+	return array_values( array_filter( $payload['messages'], static fn( array $message ): bool => 'system' !== $message['role'] ) );
+}
+
+function alternating( int $count ): array {
+	$messages = array();
+	for ( $i = 1; $i <= $count; ++$i ) {
+		$messages[] = array( 'role' => 1 === $i % 2 ? 'user' : 'assistant', 'content' => 'm' . $i );
+	}
+
+	return $messages;
+}
+
+foreach ( array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom' ) as $type ) {
+	$run(
+		$type . ': generate() sends exactly the historical request body',
+		static function () use ( $type, $cipher ): void {
+			$capture = chatFixture( $type );
+			assertTrue( ! is_wp_error( service( $cipher )->generate( 'Bonjour' ) ), 'generate should succeed' );
+			$system   = array( 'role' => 'system', 'content' => 'Réponds brièvement.' );
+			$user     = array( 'role' => 'user', 'content' => 'Bonjour' );
+			$expected = array(
+				'openai'    => array( 'model' => 'test-model', 'messages' => array( $system, $user ), 'temperature' => 0.4, 'max_tokens' => 80 ),
+				'anthropic' => array( 'model' => 'test-model', 'max_tokens' => 80, 'messages' => array( $user ), 'temperature' => 0.4, 'system' => 'Réponds brièvement.' ),
+				'ollama'    => array( 'model' => 'test-model', 'messages' => array( $system, $user ), 'stream' => false, 'options' => array( 'temperature' => 0.4, 'num_predict' => 80 ) ),
+			);
+			$expected['mistral'] = $expected['openai'];
+			$expected['custom']  = $expected['openai'];
+			assertSameValue( json_encode( $expected[ $type ], JSON_UNESCAPED_UNICODE ), $capture->body, $type . ' body' );
+		}
+	);
+
+	$run(
+		$type . ': two consecutive user messages are merged',
+		static function () use ( $type, $cipher ): void {
+			$capture = chatFixture( $type );
+			$result  = service( $cipher )->generateChat( array( 'messages' => array(
+				array( 'role' => 'user', 'content' => 'a' ),
+				array( 'role' => 'user', 'content' => 'b' ),
+			) ) );
+			assertTrue( ! is_wp_error( $result ), 'merge request should succeed' );
+			assertSameValue( array( array( 'role' => 'user', 'content' => "a\n\nb" ) ), sentMessages( $capture->payload ), $type . ' merged messages' );
+		}
+	);
+}
+
+$run(
+	'history: only the last 6 history messages are sent, the first being a user message',
+	static function () use ( $cipher ): void {
+		$capture  = chatFixture( 'openai', array( 'history_max_messages' => 6 ) );
+		$messages = array_merge( alternating( 10 ), array( array( 'role' => 'user', 'content' => 'question' ) ) );
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( array( 'messages' => $messages ) ) ), 'chat should succeed' );
+		$sent = sentMessages( $capture->payload );
+		assertSameValue( 7, count( $sent ), '6 history messages plus the question' );
+		assertSameValue( 'm5', $sent[0]['content'], 'oldest kept message' );
+		assertSameValue( 'user', $sent[0]['role'], 'first kept message is a user message' );
+		assertSameValue( 'question', $sent[6]['content'], 'question is last' );
+		assertSameValue( 'system', $capture->payload['messages'][0]['role'], 'system message first' );
+	}
+);
+
+$run(
+	'history: an odd maximum drops one more message to start with a user message',
+	static function () use ( $cipher ): void {
+		$capture  = chatFixture( 'openai', array( 'history_max_messages' => 5 ) );
+		$messages = array_merge( alternating( 10 ), array( array( 'role' => 'user', 'content' => 'question' ) ) );
+		service( $cipher )->generateChat( array( 'messages' => $messages ) );
+		$sent = sentMessages( $capture->payload );
+		assertSameValue( 5, count( $sent ), '4 history messages plus the question' );
+		assertSameValue( 'm7', $sent[0]['content'], 'first kept message' );
+	}
+);
+
+$run(
+	'history: the token budget removes the oldest messages two by two, never the question',
+	static function () use ( $cipher ): void {
+		$capture = chatFixture( 'openai', array( 'history_max_messages' => 20, 'history_token_budget' => 250 ) );
+		$long    = str_repeat( 'x', 400 );
+		$history = alternating( 10 );
+		foreach ( $history as $i => $message ) {
+			$history[ $i ]['content'] = $message['content'] . $long;
+		}
+		$messages = array_merge( $history, array( array( 'role' => 'user', 'content' => $long . 'question' ) ) );
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( array( 'messages' => $messages ) ) ), 'chat should succeed' );
+		$sent = sentMessages( $capture->payload );
+		assertSameValue( 3, count( $sent ), '2 history messages plus the question' );
+		assertSameValue( 'user', $sent[0]['role'], 'first kept message is a user message' );
+		assertTrue( str_ends_with( $sent[2]['content'], 'question' ), 'question is kept in full' );
+	}
+);
+
+$run(
+	'history disabled: only the question is sent and invalid history is still refused',
+	static function () use ( $cipher ): void {
+		$capture  = chatFixture( 'openai', array( 'history_enabled' => 0 ) );
+		$messages = array_merge( alternating( 10 ), array( array( 'role' => 'user', 'content' => 'question' ) ) );
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( array( 'messages' => $messages ) ) ), 'chat should succeed' );
+		assertSameValue( array( array( 'role' => 'user', 'content' => 'question' ) ), sentMessages( $capture->payload ), 'only the question' );
+
+		$bad = array( array( 'role' => 'system', 'content' => 'x' ), array( 'role' => 'user', 'content' => 'question' ) );
+		$result = service( $cipher )->generateChat( array( 'messages' => $bad ) );
+		assertSameValue( 'wpia_invalid_request', $result->get_error_code(), 'invalid history refused even when disabled' );
+	}
+);
+
+$run(
+	'limiter reservation covers the kept history only',
+	static function () use ( $cipher ): void {
+		$long     = str_repeat( 'x', 400 );
+		$history  = alternating( 10 );
+		foreach ( $history as $i => $message ) {
+			$history[ $i ]['content'] = $long;
+		}
+		$messages = array_merge( $history, array( array( 'role' => 'user', 'content' => 'q' ) ) );
+
+		// 10 messages d'historique = 1 000 tokens : au-delà du plafond de 400.
+		$capture = chatFixture( 'openai', array( 'daily_token_limit' => 400, 'history_max_messages' => 20, 'history_token_budget' => 20000 ) );
+		$result  = service( $cipher )->generateChat( array( 'messages' => $messages ) );
+		assertSameValue( 'wpia_limit_reached', $result->get_error_code(), 'full history exceeds the daily limit' );
+		assertSameValue( 0, $capture->calls, 'refused before the provider call' );
+
+		// Tronqué à 200 tokens : l'estimation tient dans le plafond.
+		$capture = chatFixture( 'openai', array( 'daily_token_limit' => 400, 'history_max_messages' => 20, 'history_token_budget' => 250 ) );
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( array( 'messages' => $messages ) ) ), 'truncated history fits' );
+
+		// Historique désactivé : seule la question compte.
+		$capture = chatFixture( 'openai', array( 'daily_token_limit' => 400, 'history_enabled' => 0 ) );
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( array( 'messages' => $messages ) ) ), 'disabled history fits' );
+	}
+);
+
+$run(
+	'invalid conversations are refused without provider call',
+	static function () use ( $cipher ): void {
+		$capture = chatFixture( 'openai' );
+		$user    = array( 'role' => 'user', 'content' => 'question' );
+		$cases   = array(
+			'empty list'         => array(),
+			'last is assistant'  => array( $user, array( 'role' => 'assistant', 'content' => 'réponse' ) ),
+			'system role'        => array( array( 'role' => 'system', 'content' => 'x' ), $user ),
+			'unknown role'       => array( array( 'role' => 'tool', 'content' => 'x' ), $user ),
+			'empty content'      => array( array( 'role' => 'assistant', 'content' => '  ' ), $user ),
+			'non-string content' => array( array( 'role' => 'assistant', 'content' => array( 'x' ) ), $user ),
+			'41 messages'        => array_merge( alternating( 40 ), array( $user ) ),
+			'8001 characters'    => array( array( 'role' => 'user', 'content' => str_repeat( 'é', 8001 ) ) ),
+		);
+		foreach ( $cases as $name => $messages ) {
+			$result = service( $cipher )->generateChat( array( 'messages' => $messages ) );
+			assertTrue( is_wp_error( $result ), $name . ' should be refused' );
+			assertSameValue( 'wpia_invalid_request', $result->get_error_code(), $name . ' error code' );
+		}
+		assertSameValue( 0, $capture->calls, 'no provider call' );
+
+		$ok = service( $cipher )->generateChat( array( 'messages' => array( array( 'role' => 'user', 'content' => str_repeat( 'é', 8000 ) ) ) ) );
+		assertTrue( ! is_wp_error( $ok ), '8000 characters are accepted' );
+	}
+);
+
+$run(
+	'chatbot_id must be the active chatbot, and failures never log the conversation',
+	static function () use ( $cipher ): void {
+		$capture = chatFixture( 'openai' );
+		$request = array( 'messages' => array( array( 'role' => 'user', 'content' => 'secret-question' ) ) );
+
+		assertTrue( ! is_wp_error( service( $cipher )->generateChat( $request + array( 'chatbot_id' => 1 ) ) ), 'active chatbot accepted' );
+		assertSameValue( 1, $capture->calls, 'one call for the active chatbot' );
+
+		$result = service( $cipher )->generateChat( $request + array( 'chatbot_id' => 2 ) );
+		assertSameValue( 'wpia_configuration_error', $result->get_error_code(), 'other chatbot refused' );
+
+		$GLOBALS['wpdb']->rows['chatbot'][1]['actif'] = 0;
+		$result = service( $cipher )->generateChat( $request + array( 'chatbot_id' => 1 ) );
+		assertSameValue( 'wpia_configuration_error', $result->get_error_code(), 'inactive chatbot refused' );
+		assertSameValue( 1, $capture->calls, 'no call for refused chatbots' );
+		assertTrue( ! str_contains( json_encode( $GLOBALS['wpdb']->logs ), 'secret-question' ), 'logs must not contain the conversation' );
+	}
+);
+
+$run(
+	'history settings: defaults, bounds and warning',
+	static function (): void {
+		$GLOBALS['wpia_options']['wpia_admin_settings'] = array();
+		$defaults = WPIA\Admin\AdminSettings::defaults();
+		assertSameValue( 1, $defaults['history_enabled'], 'history enabled by default' );
+		assertSameValue( 6, $defaults['history_max_messages'], 'default maximum messages' );
+		assertSameValue( 1500, $defaults['history_token_budget'], 'default token budget' );
+		assertSameValue( 100000, $defaults['daily_token_limit'], 'default daily limit' );
+		assertSameValue( 40000, $defaults['max_tokens_conversation'], 'default conversation limit' );
+
+		$GLOBALS['wpia_settings_errors'] = array();
+		$saved = WPIA\Admin\AdminSettings::sanitize( array( 'history_max_messages' => '25', 'history_token_budget' => '50', 'max_tokens_conversation' => '100' ) );
+		assertSameValue( 20, $saved['history_max_messages'], 'maximum messages is bounded' );
+		assertSameValue( 100, $saved['history_token_budget'], 'token budget is bounded' );
+		assertSameValue( 0, $saved['history_enabled'], 'unchecked box disables the history' );
+		assertSameValue( array(), $GLOBALS['wpia_settings_errors'], 'no warning when the history is disabled' );
+
+		$saved = WPIA\Admin\AdminSettings::sanitize( array( 'history_enabled' => '1', 'max_tokens_conversation' => '100' ) );
+		assertSameValue( 1, $saved['history_enabled'], 'checked box enables the history' );
+		assertSameValue( 'wpia_low_conversation_limit', $GLOBALS['wpia_settings_errors'][0]['code'], 'low conversation limit warning' );
+		assertSameValue( 'warning', $GLOBALS['wpia_settings_errors'][0]['type'], 'warning type' );
+		$GLOBALS['wpia_options']['wpia_admin_settings'] = array();
+	}
+);
+
+
+// ---------------------------------------------------------------------------
+// Génération multi-tours (issue 008, lot B) : cache de prompt.
+// ---------------------------------------------------------------------------
+
+/** Appelle directement le fournisseur Anthropic et renvoie le corps JSON envoyé. */
+function anthropicSystem( string $stable, string $variable = '' ): array {
+	$capture = array();
+	$GLOBALS['wpia_http_callback'] = static function ( string $url, array $args ) use ( &$capture ): array {
+		$capture = json_decode( $args['body'], true );
+		return response( 200, '{}' );
+	};
+	( new WPIA\Service\Ia\Fournisseur\AnthropicProvider() )->generate(
+		'https://api.anthropic.com/v1',
+		'key',
+		array(
+			'model'       => 'm',
+			'systeme'     => array( 'stable' => $stable, 'variable' => $variable ),
+			'messages'    => array( array( 'role' => 'user', 'content' => 'q' ) ),
+			'temperature' => 0.4,
+			'max_tokens'  => 10,
+			'timeout'     => 5,
+		)
+	);
+
+	return $capture;
+}
+
+$run(
+	'anthropic cache: stable prompt above the threshold becomes a cached block followed by the variable block',
+	static function (): void {
+		$stable = str_repeat( 'a', 4100 ); // 1 025 tokens estimés.
+		$body   = anthropicSystem( $stable, 'variable' );
+		assertSameValue(
+			array(
+				array( 'type' => 'text', 'text' => $stable, 'cache_control' => array( 'type' => 'ephemeral' ) ),
+				array( 'type' => 'text', 'text' => 'variable' ),
+			),
+			$body['system'],
+			'system blocks'
+		);
+
+		$body = anthropicSystem( $stable );
+		assertSameValue( 1, count( $body['system'] ), 'no empty variable block' );
+	}
+);
+
+$run(
+	'anthropic cache: at or below the threshold the system prompt stays a plain string',
+	static function (): void {
+		$stable = str_repeat( 'a', 4096 ); // 1 024 tokens : pas au-dessus du seuil.
+		assertSameValue( $stable . "\n\nvariable", anthropicSystem( $stable, 'variable' )['system'], 'system string' );
+		assertSameValue( 'court', anthropicSystem( 'court' )['system'], 'short system string' );
+	}
+);
+
+$run(
+	'anthropic cache: through the service, a long chatbot prompt is cached and a short one is not',
+	static function () use ( $cipher ): void {
+		$capture = chatFixture( 'anthropic' );
+		$GLOBALS['wpdb']->rows['chatbot'][1]['system_prompt'] = str_repeat( 'a', 4100 );
+		service( $cipher )->generate( 'Bonjour' );
+		assertSameValue( array( 'type' => 'ephemeral' ), $capture->payload['system'][0]['cache_control'], 'cache_control set' );
+	}
+);
+
+$run(
+	'usage: Anthropic input tokens include cache reads and writes',
+	static function (): void {
+		$normalizer = new WPIA\Service\Ia\ResponseNormalizer();
+		$body       = json_encode( array(
+			'content' => array( array( 'type' => 'text', 'text' => 'ok' ) ),
+			'usage'   => array( 'input_tokens' => 20, 'output_tokens' => 3, 'cache_read_input_tokens' => 3000, 'cache_creation_input_tokens' => 100 ),
+		) );
+		$result = $normalizer->normalize( 'anthropic', response( 200, $body ), 'm', 100 );
+		assertSameValue( 3120, $result['usage']['input_tokens'], 'input includes cache' );
+		assertSameValue( 3123, $result['usage']['total_tokens'], 'total includes cache' );
+		assertSameValue( 3000, $result['usage']['cache_read_tokens'], 'cache_read_tokens' );
+
+		$body   = json_encode( array( 'content' => array( array( 'type' => 'text', 'text' => 'ok' ) ), 'usage' => array( 'input_tokens' => 5, 'output_tokens' => 3 ) ) );
+		$result = $normalizer->normalize( 'anthropic', response( 200, $body ), 'm', 100 );
+		assertSameValue( array( 'input_tokens' => 5, 'output_tokens' => 3, 'total_tokens' => 8 ), $result['usage'], 'no cache key without cache usage' );
+	}
+);
+
+$run(
+	'usage: OpenAI prompt tokens already include the cached tokens',
+	static function (): void {
+		$body = json_encode( array(
+			'choices' => array( array( 'message' => array( 'content' => 'ok' ) ) ),
+			'usage'   => array( 'prompt_tokens' => 3020, 'completion_tokens' => 3, 'prompt_tokens_details' => array( 'cached_tokens' => 3000 ) ),
+		) );
+		$result = ( new WPIA\Service\Ia\ResponseNormalizer() )->normalize( 'openai', response( 200, $body ), 'm', 100 );
+		assertSameValue( 3020, $result['usage']['input_tokens'], 'input not added twice' );
+		assertSameValue( 3000, $result['usage']['cache_read_tokens'], 'cache_read_tokens' );
+	}
+);
+
+$run(
+	'usage: the total handed to the limiter includes cached tokens',
+	static function () use ( $cipher ): void {
+		chatFixture( 'anthropic' );
+		$GLOBALS['wpia_http_callback'] = static fn( string $url, array $args ): array => response( 200, json_encode( array(
+			'content' => array( array( 'type' => 'text', 'text' => 'ok' ) ),
+			'usage'   => array( 'input_tokens' => 20, 'output_tokens' => 3, 'cache_read_input_tokens' => 3000 ),
+		) ) );
+		$result = service( $cipher )->generate( 'Bonjour' );
+		assertSameValue( 3023, $result['usage']['total_tokens'], 'total confirmed to the limiter' );
+	}
+);
+
+assertSameValue( 75, $tests, 'total passing test count' );
 echo "All {$tests} tests passed.\n";
