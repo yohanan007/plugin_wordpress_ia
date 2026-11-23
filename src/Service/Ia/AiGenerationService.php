@@ -15,11 +15,16 @@ use WPIA\Service\Ia\Fournisseur\MistralProvider;
 use WPIA\Service\Ia\Fournisseur\OllamaProvider;
 use WPIA\Service\Ia\Fournisseur\OpenAiProvider;
 use WPIA\Repository\LimiteUtilisationRepository;
+use WPIA\Service\Prompt\TokenEstimator;
 use WPIA\Service\Securite\SecretCipher;
 use WPIA\Service\Usage\UsageLimiter;
 use WPIA\Service\Usage\VisitorIdentity;
 
 class AiGenerationService {
+	/** Bornes de sécurité sur la conversation reçue (avant troncature). */
+	private const MAX_MESSAGES = 40;
+	private const MESSAGE_MAX_CARACTERES = 8000;
+
 	private ?\wpdb $wpdb;
 	private SecretCipher $cipher;
 	private ResponseNormalizer $normalizer;
@@ -39,6 +44,8 @@ class AiGenerationService {
 	}
 
 	/**
+	 * Échange unique : conservé pour la compatibilité (test de connexion, appelants existants).
+	 *
 	 * @param array{visiteur?:string,session?:string} $contexte
 	 *        visiteur : identifiant pseudonyme déjà calculé (par défaut : VisitorIdentity::fromRequest()).
 	 *        session  : jeton brut de conversation (cookie wpia_session), haché avant stockage.
@@ -49,12 +56,42 @@ class AiGenerationService {
 			return $this->failure( 'wpia_invalid_request', __( 'Le prompt ne peut pas être vide.', 'plugin-wordpress-ia' ) );
 		}
 
+		return $this->generateChat(
+			array(
+				'messages'  => array(
+					array(
+						'role'    => 'user',
+						'content' => $prompt,
+					),
+				),
+				'identites' => $contexte,
+			)
+		);
+	}
+
+	/**
+	 * Conversation complète : historique et question.
+	 *
+	 * @param array{messages:array<int, array{role:string,content:string}>,chatbot_id?:int,identites?:array{visiteur?:string,session?:string}} $requete
+	 *        messages   : conversation, le dernier message étant la question (rôle user).
+	 *        chatbot_id : facultatif ; doit être le chatbot actif (MVP).
+	 *        identites  : même contenu que le `$contexte` de generate().
+	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int}}|\WP_Error
+	 */
+	public function generateChat( array $requete ): array|\WP_Error {
+		$messages = $this->validerMessages( $requete['messages'] ?? null );
+		if ( is_wp_error( $messages ) ) {
+			return $messages;
+		}
+		$identites  = isset( $requete['identites'] ) && is_array( $requete['identites'] ) ? $requete['identites'] : array();
+		$demande_id = isset( $requete['chatbot_id'] ) ? absint( $requete['chatbot_id'] ) : null;
+
 		if ( null === $this->wpdb ) {
 			return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est indisponible.', 'plugin-wordpress-ia' ) );
 		}
 
 		try {
-			$config = $this->loadConfiguration();
+			$config = $this->loadConfiguration( $demande_id );
 		} catch ( RuntimeException $exception ) {
 			return $this->logFailure(
 				'configuration',
@@ -95,13 +132,22 @@ class AiGenerationService {
 			return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est indisponible.', 'plugin-wordpress-ia' ) );
 		}
 
+		$question     = $messages[ count( $messages ) - 1 ];
+		$systeme      = $this->buildSystem( $config, $question['content'] );
+		$historique   = $this->tronquerHistorique( array_slice( $messages, 0, -1 ), AdminSettings::get() );
+		$conversation = array_merge( $historique, array( $question ) );
+
 		// Réservation avant l'appel : en cas de refus, le fournisseur n'est pas contacté.
-		$estimation  = $this->limiter->estimer( array( $config['system_prompt'], $prompt ), $config['max_tokens'] );
+		// L'estimation porte sur tout ce qui est envoyé, après troncature de l'historique.
+		$estimation  = $this->limiter->estimer(
+			array_merge( array( $systeme['stable'], $systeme['variable'] ), array_column( $conversation, 'content' ) ),
+			$config['max_tokens']
+		);
 		$reservation = $this->limiter->reserver(
 			$config['chatbot_id'],
 			array(
-				'visiteur' => isset( $contexte['visiteur'] ) && is_string( $contexte['visiteur'] ) ? $contexte['visiteur'] : $this->identity->fromRequest(),
-				'session'  => isset( $contexte['session'] ) && is_string( $contexte['session'] ) ? $this->identity->forSession( $contexte['session'] ) : '',
+				'visiteur' => isset( $identites['visiteur'] ) && is_string( $identites['visiteur'] ) ? $identites['visiteur'] : $this->identity->fromRequest(),
+				'session'  => isset( $identites['session'] ) && is_string( $identites['session'] ) ? $this->identity->forSession( $identites['session'] ) : '',
 			),
 			$estimation
 		);
@@ -114,12 +160,12 @@ class AiGenerationService {
 			$config['url'],
 			$api_key,
 			array(
-				'model'         => $config['model'],
-				'system_prompt' => $config['system_prompt'],
-				'prompt'        => $prompt,
-				'temperature'   => $config['temperature'],
-				'max_tokens'    => $config['max_tokens'],
-				'timeout'       => $config['timeout'],
+				'model'       => $config['model'],
+				'systeme'     => $systeme,
+				'messages'    => $conversation,
+				'temperature' => $config['temperature'],
+				'max_tokens'  => $config['max_tokens'],
+				'timeout'     => $config['timeout'],
 			)
 		);
 
@@ -143,7 +189,7 @@ class AiGenerationService {
 	/**
 	 * @return array<string, mixed>|\WP_Error
 	 */
-	private function loadConfiguration(): array|\WP_Error {
+	private function loadConfiguration( ?int $demande_id = null ): array|\WP_Error {
 		$active = get_option( 'wpia_active_configuration', array() );
 		if ( ! is_array( $active ) ) {
 			return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est indisponible.', 'plugin-wordpress-ia' ) );
@@ -162,6 +208,10 @@ class AiGenerationService {
 		$chatbot_id  = isset( $active['chatbot_id'] ) ? absint( $active['chatbot_id'] ) : 0;
 		if ( $provider_id < 1 || $account_id < 1 || $chatbot_id < 1 ) {
 			return $this->failure( 'wpia_configuration_error', __( 'La configuration de génération est incomplète.', 'plugin-wordpress-ia' ) );
+		}
+		// MVP : seul le chatbot actif peut être demandé (le type de fournisseur vient de l'option).
+		if ( null !== $demande_id && $demande_id !== $chatbot_id ) {
+			return $this->failure( 'wpia_configuration_error', __( 'Le chatbot demandé est indisponible.', 'plugin-wordpress-ia' ) );
 		}
 
 		$provider = ( new FournisseurIARepository( $this->wpdb ) )->getById( $provider_id );
@@ -205,6 +255,106 @@ class AiGenerationService {
 			'timeout'        => $timeout,
 			'encrypted_key'  => isset( $account['api_key'] ) && is_string( $account['api_key'] ) ? $account['api_key'] : '',
 		);
+	}
+
+	/**
+	 * Prompt système construit côté serveur, jamais reçu de la requête.
+	 * Lot A : les consignes du chatbot seules. 006 et 009 remplaceront ce corps
+	 * (assemblage des blocs) en gardant le même type de retour.
+	 *
+	 * @param array<string, mixed> $config
+	 * @return array{stable:string,variable:string}
+	 */
+	private function buildSystem( array $config, string $question ): array {
+		return array(
+			'stable'   => $config['system_prompt'],
+			'variable' => '',
+		);
+	}
+
+	/**
+	 * @param mixed $messages
+	 * @return array<int, array{role:string,content:string}>|\WP_Error
+	 */
+	private function validerMessages( $messages ): array|\WP_Error {
+		$invalide = $this->failure( 'wpia_invalid_request', __( 'La conversation est invalide.', 'plugin-wordpress-ia' ) );
+
+		if ( ! is_array( $messages ) || array() === $messages || count( $messages ) > self::MAX_MESSAGES || array_keys( $messages ) !== range( 0, count( $messages ) - 1 ) ) {
+			return $invalide;
+		}
+
+		$resultat = array();
+		foreach ( $messages as $message ) {
+			if (
+				! is_array( $message )
+				|| ! isset( $message['role'], $message['content'] )
+				|| ! is_string( $message['role'] )
+				|| ! in_array( $message['role'], array( 'user', 'assistant' ), true )
+				|| ! is_string( $message['content'] )
+				|| '' === trim( $message['content'] )
+				|| TokenEstimator::caracteres( $message['content'] ) > self::MESSAGE_MAX_CARACTERES
+			) {
+				return $invalide;
+			}
+			$resultat[] = array(
+				'role'    => $message['role'],
+				'content' => $message['content'],
+			);
+		}
+
+		return 'user' === $resultat[ count( $resultat ) - 1 ]['role'] ? $resultat : $invalide;
+	}
+
+	/**
+	 * Garde les derniers messages de l'historique (la question n'en fait pas partie),
+	 * dans le budget de tokens, en coupant toujours au début. Le premier message
+	 * conservé est un message `user`. Option désactivée : aucun historique.
+	 *
+	 * @param array<int, array{role:string,content:string}> $historique
+	 * @param array<string, mixed>                          $settings
+	 * @return array<int, array{role:string,content:string}>
+	 */
+	private function tronquerHistorique( array $historique, array $settings ): array {
+		if ( empty( $settings['history_enabled'] ) ) {
+			return array();
+		}
+
+		$max    = max( 1, (int) $settings['history_max_messages'] );
+		$budget = (int) $settings['history_token_budget'];
+		if ( count( $historique ) > $max ) {
+			$historique = array_slice( $historique, -$max );
+		}
+
+		$historique = $this->commencerParUser( $historique );
+		while ( array() !== $historique && $this->tokensDe( $historique ) > $budget ) {
+			$historique = $this->commencerParUser( array_slice( $historique, 2 ) );
+		}
+
+		return $historique;
+	}
+
+	/**
+	 * @param array<int, array{role:string,content:string}> $messages
+	 * @return array<int, array{role:string,content:string}>
+	 */
+	private function commencerParUser( array $messages ): array {
+		while ( array() !== $messages && 'user' !== $messages[0]['role'] ) {
+			array_shift( $messages );
+		}
+
+		return array_values( $messages );
+	}
+
+	/**
+	 * @param array<int, array{role:string,content:string}> $messages
+	 */
+	private function tokensDe( array $messages ): int {
+		$total = 0;
+		foreach ( $messages as $message ) {
+			$total += TokenEstimator::estimer( $message['content'] );
+		}
+
+		return $total;
 	}
 
 	private function isValidProviderUrl( string $type, string $url ): bool {

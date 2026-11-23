@@ -40,7 +40,63 @@ abstract class AbstractProvider {
 	}
 
 	/**
-	 * @param array<string, mixed> $parameters
+	 * Fusionne les messages consécutifs de même rôle (séparés par une ligne vide) :
+	 * la plupart des fournisseurs exigent une alternance stricte user / assistant.
+	 *
+	 * @param array<int, array{role:string,content:string}> $messages
+	 * @return array<int, array{role:string,content:string}>
+	 */
+	protected function buildMessages( array $messages ): array {
+		$result = array();
+		foreach ( $messages as $message ) {
+			$last = count( $result ) - 1;
+			if ( $last >= 0 && $result[ $last ]['role'] === $message['role'] ) {
+				$result[ $last ]['content'] .= "\n\n" . $message['content'];
+				continue;
+			}
+			$result[] = array(
+				'role'    => $message['role'],
+				'content' => $message['content'],
+			);
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Prompt système en un seul texte : partie stable d'abord (préfixe commun
+	 * entre deux requêtes), partie variable ensuite.
+	 *
+	 * @param array{stable:string,variable:string} $systeme
+	 */
+	protected function systemeTexte( array $systeme ): string {
+		return implode( "\n\n", array_filter( array( $systeme['stable'], $systeme['variable'] ), static fn( string $part ): bool => '' !== $part ) );
+	}
+
+	/**
+	 * Liste de messages au format « chat completions » : message system en tête
+	 * (s'il n'est pas vide), puis la conversation.
+	 *
+	 * @param array{stable:string,variable:string}          $systeme
+	 * @param array<int, array{role:string,content:string}> $messages
+	 * @return array<int, array{role:string,content:string}>
+	 */
+	protected function buildChatMessages( array $systeme, array $messages ): array {
+		$result = array();
+		$system = $this->systemeTexte( $systeme );
+		if ( '' !== $system ) {
+			$result[] = array(
+				'role'    => 'system',
+				'content' => $system,
+			);
+		}
+
+		return array_merge( $result, $this->buildMessages( $messages ) );
+	}
+
+	/**
+	 * @param array<string, mixed> $parameters `systeme` ({stable, variable}) et `messages`
+	 *                                         remplacent l'ancien couple system_prompt / prompt.
 	 * @return array|\WP_Error
 	 */
 	abstract public function generate( string $base_url, string $api_key, array $parameters ): array|\WP_Error;
