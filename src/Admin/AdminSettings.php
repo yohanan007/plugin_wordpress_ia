@@ -24,6 +24,7 @@ class AdminSettings {
 			'context_token_budget'   => 6000,
 			'context_fixed_max_tokens' => 1500,
 			'prompt_admin_max_tokens' => 1000,
+			'max_message_length'     => 500,
 			'history_enabled'        => 1,
 			'history_max_messages'   => 6,
 			'history_token_budget'   => 1500,
@@ -64,6 +65,7 @@ class AdminSettings {
 			'context_token_budget'    => array( 500, 100000 ),
 			'context_fixed_max_tokens' => array( 100, 20000 ),
 			'prompt_admin_max_tokens' => array( 100, 10000 ),
+			'max_message_length'      => array( 20, 2000 ),
 			'history_max_messages'    => array( 1, 20 ),
 			'history_token_budget'    => array( 100, 20000 ),
 		);
@@ -157,6 +159,7 @@ class AdminSettings {
 			'context_token_budget'    => __( 'Documents : budget total envoyé à l’IA (tokens, contexte et documents complets)', 'plugin-wordpress-ia' ),
 			'context_fixed_max_tokens' => __( 'Documents : taille maximale du contexte toujours envoyé en entier (tokens)', 'plugin-wordpress-ia' ),
 			'prompt_admin_max_tokens' => __( 'Consignes complémentaires du chatbot : taille maximale (tokens)', 'plugin-wordpress-ia' ),
+			'max_message_length'      => __( 'Chat public : longueur maximale d’un message visiteur (caractères)', 'plugin-wordpress-ia' ),
 			'history_max_messages'    => __( 'Historique : nombre maximum de messages renvoyés au fournisseur', 'plugin-wordpress-ia' ),
 			'history_token_budget'    => __( 'Historique : budget maximal (tokens)', 'plugin-wordpress-ia' ),
 		);
