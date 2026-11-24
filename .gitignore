@@ -51,3 +51,5 @@ model.md
 # Note: If you wish to whitelist themes,
 # uncomment the next line
 #/wp-content/themes
+# Rapport du jeu d'évaluation (à joindre à la PR)
+tests/evaluation/rapport.md

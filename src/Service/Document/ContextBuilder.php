@@ -83,7 +83,7 @@ class ContextBuilder {
 		$contexte = $this->lisibles( $contexte );
 		$tokens_contexte = $this->total( $contexte );
 		if ( array() !== $contexte ) {
-			$resultat['contexte']           = $this->bloc( 'contexte', $contexte );
+			$resultat['contexte']           = self::bloc( 'contexte', $contexte );
 			$resultat['tokens']['contexte'] = $tokens_contexte;
 		}
 
@@ -100,7 +100,7 @@ class ContextBuilder {
 			}
 			$choisies = $this->lisibles( $choisies );
 			if ( array() !== $choisies ) {
-				$resultat['complet']           = $this->bloc( 'documents', $choisies );
+				$resultat['complet']           = self::bloc( 'documents', $choisies );
 				$resultat['tokens']['complet'] = $this->total( $choisies );
 			}
 		} elseif ( array() !== $contexte ) {
@@ -197,7 +197,7 @@ class ContextBuilder {
 	/**
 	 * @param array<int, array<string, mixed>> $sections
 	 */
-	private function bloc( string $balise, array $sections ): string {
+	public static function bloc( string $balise, array $sections ): string {
 		$lignes = array( '<' . $balise . '>' );
 		foreach ( $sections as $section ) {
 			$lignes[] = sprintf(

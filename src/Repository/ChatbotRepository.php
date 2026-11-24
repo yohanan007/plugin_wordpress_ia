@@ -13,6 +13,13 @@ class ChatbotRepository extends AbstractRepository {
 		'system_prompt' => '%s',
 		'max_tokens'    => '%d',
 		'temperature'   => '%f',
+		'sujet'               => '%s',
+		'ton'                 => '%s',
+		'langue'              => '%s',
+		'message_accueil'     => '%s',
+		'message_hors_sujet'  => '%s',
+		'questions_suggerees' => '%s',
+		'marqueur_temoin'     => '%s',
 		'actif'         => '%d',
 	);
 }
