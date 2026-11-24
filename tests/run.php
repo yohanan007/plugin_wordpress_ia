@@ -2251,5 +2251,191 @@ $run(
 	}
 );
 
-assertSameValue( 102, $tests, 'total passing test count' );
+$run(
+	'markdown renderer: supported syntax',
+	static function (): void {
+		$r = new WPIA\Service\MarkdownRenderer();
+		assertSameValue( '<p>Un <strong>gras</strong> et un <em>italique</em> et <code>a*b*</code>.</p>', $r->render( 'Un **gras** et un *italique* et `a*b*`.' ), 'inline' );
+		assertSameValue( '<ul><li>un</li><li>deux</li></ul>', $r->render( "- un\n* deux" ), 'bullet list' );
+		assertSameValue( '<ol><li>a</li><li>b</li></ol>', $r->render( "1. a\n2) b" ), 'numbered list' );
+		assertSameValue( "<p>l1<br>l2</p>\n<p>x</p>", $r->render( "l1\nl2\n\nx" ), 'paragraphs and line breaks' );
+		assertSameValue( '<pre><code>&lt;b&gt;x&lt;/b&gt; **no**</code></pre>', $r->render( "```php\n<b>x</b> **no**\n```" ), 'code block is escaped, not interpreted' );
+		assertSameValue( '<p><strong>Titre</strong></p>', $r->render( '## Titre' ), 'heading rendered as bold' );
+		assertSameValue( '', $r->render( '' ), 'empty input' );
+		assertSameValue( '<p>snake_case_name et 2*3*4</p>', $r->render( 'snake_case_name et 2*3*4' ), 'no false emphasis' );
+	}
+);
+
+$run(
+	'markdown renderer: hostile input is neutralised',
+	static function (): void {
+		$r    = new WPIA\Service\MarkdownRenderer();
+		$html = $r->render( '<script>alert(1)</script> <img src=x onerror=alert(1)>' );
+		assertTrue( ! str_contains( $html, '<script' ) && ! str_contains( $html, '<img' ), 'raw html escaped' );
+		assertTrue( ! str_contains( $r->render( '[x](javascript:alert(1))' ), '<a' ), 'javascript: link dropped' );
+		assertTrue( str_starts_with( $r->render( '[x](javascript:alert(1))' ), '<p>x' ), 'only the label remains' );
+		assertTrue( ! str_contains( $r->render( '[x](JaVaScRiPt:alert(1))' ), '<a' ), 'mixed-case scheme dropped' );
+		assertTrue( ! str_contains( $r->render( '[x](&#106;avascript:alert(1))' ), '<a' ), 'entity-encoded scheme dropped' );
+		assertTrue( ! str_contains( $r->render( '[x](data:text/html;base64,AAA)' ), '<a' ), 'data: link dropped' );
+		assertTrue( ! str_contains( $r->render( "[x](https://a.fr/\x01b)" ), '<a' ), 'control character in url dropped' );
+		$link = $r->render( '[x](https://a.fr/?q="onmouseover="alert(1))' );
+		assertTrue( ! str_contains( $link, 'onmouseover="' ), 'quotes cannot break out of href' );
+		assertTrue( ! str_contains( $r->render( "a\0b\0 0\0" ), "\0" ), 'NUL bytes removed' );
+		assertTrue( ! str_contains( $r->render( '`<i>`[`<b>`](https://a.fr)' ), '<i>' ), 'code in link label stays escaped' );
+	}
+);
+
+$run(
+	'markdown renderer: links',
+	static function (): void {
+		$r = new WPIA\Service\MarkdownRenderer();
+		assertSameValue(
+			'<p><a href="https://a.fr/?x=1&amp;y=2" rel="nofollow noopener" target="_blank">le <strong>site</strong></a></p>',
+			$r->render( '[le **site**](https://a.fr/?x=1&y=2)' ),
+			'https link with forced rel and target and escaped ampersand'
+		);
+		assertTrue( str_contains( $r->render( '[m](mailto:a@b.fr)' ), 'href="mailto:a@b.fr"' ), 'mailto allowed' );
+		assertTrue( ! str_contains( $r->render( '[x](ftp://a.fr)' ), '<a' ), 'ftp dropped' );
+	}
+);
+
+function publicHandler( array $settings = array(), ?callable $burst = null ): array {
+	$capture = chatFixture( 'openai', array_merge( array( 'chatbot_enabled' => 1, 'max_message_length' => 500 ), $settings ) );
+	$GLOBALS['wpdb']->rows['chatbot'][1]['message_accueil']     = 'Bonjour !';
+	$GLOBALS['wpdb']->rows['chatbot'][1]['questions_suggerees'] = json_encode( array( 'Quelles compétences ?', 42 ) );
+	$handler = new WPIA\Front\PublicChatHandler(
+		service( new TestCipher() ),
+		new WPIA\Repository\ChatbotRepository( $GLOBALS['wpdb'] ),
+		new WPIA\Service\MarkdownRenderer(),
+		static fn( string $html ): string => $html,
+		$burst ?? static fn( string $identite ): bool => true
+	);
+
+	return array( $handler, $capture );
+}
+
+function setReply( string $text ): void {
+	$GLOBALS['wpia_http_callback'] = static fn( string $url, array $args ): array => response(
+		200,
+		json_encode( array( 'choices' => array( array( 'message' => array( 'content' => $text ) ) ), 'usage' => array( 'prompt_tokens' => 5, 'completion_tokens' => 3 ) ) )
+	);
+}
+
+$run(
+	'public chat: config exposes only public fields; unavailable when disabled or other chatbot',
+	static function (): void {
+		list( $handler ) = publicHandler();
+		$config = $handler->config();
+		assertSameValue( 200, $config['status'], 'config available' );
+		assertSameValue( 'Bonjour !', $config['body']['accueil'], 'welcome message' );
+		assertSameValue( array( 'Quelles compétences ?' ), $config['body']['questions'], 'only string questions' );
+		assertSameValue( 500, $config['body']['longueur_max'], 'max message length' );
+		$json = json_encode( $config['body'] );
+		assertTrue( ! str_contains( $json, 'Réponds brièvement' ) && ! str_contains( $json, 'encrypted-test-key' ), 'no system prompt or key in the config' );
+		assertSameValue( 404, $handler->config( 2 )['status'], 'other chatbot refused' );
+		list( $disabled ) = publicHandler( array( 'chatbot_enabled' => 0 ) );
+		assertSameValue( 404, $disabled->config()['status'], 'disabled chat is unavailable' );
+		assertSameValue( 404, $disabled->chat( array( 'message' => 'Salut' ), array() )['status'], 'disabled chat refuses messages' );
+		list( $inactive ) = publicHandler();
+		$GLOBALS['wpdb']->rows['chatbot'][1]['actif'] = 0;
+		assertSameValue( 0, $inactive->chatbotPublic(), 'inactive chatbot is not public' );
+	}
+);
+
+$run(
+	'public chat: answer is rendered and history is forwarded',
+	static function (): void {
+		list( $handler, $capture ) = publicHandler();
+		setReply( 'Elle connaît **PHP**.' );
+		$result = $handler->chat(
+			array(
+				'chatbot'    => 1,
+				'message'    => 'Et avant ?',
+				'historique' => array(
+					array( 'role' => 'user', 'content' => 'Compétences ?' ),
+					array( 'role' => 'assistant', 'content' => 'PHP' ),
+				),
+			),
+			array( 'visiteur' => 'ip:a' )
+		);
+		assertSameValue( 200, $result['status'], 'success' );
+		assertSameValue( '<p>Elle connaît <strong>PHP</strong>.</p>', $result['body']['html'], 'markdown rendered' );
+		assertSameValue( 'Elle connaît **PHP**.', $result['body']['texte'], 'raw text kept for the history' );
+	}
+);
+
+$run(
+	'public chat: server-side validation refuses before any provider call',
+	static function (): void {
+		list( $handler, $capture ) = publicHandler();
+		$cases = array(
+			'too long (501)'   => array( 'message' => str_repeat( 'a', 501 ) ),
+			'empty'            => array( 'message' => '   ' ),
+			'not a string'     => array( 'message' => array( 'x' ) ),
+			'bad role'         => array( 'message' => 'ok', 'historique' => array( array( 'role' => 'system', 'content' => 'x' ) ) ),
+			'history not list' => array( 'message' => 'ok', 'historique' => 'x' ),
+		);
+		foreach ( $cases as $name => $entree ) {
+			$result = $handler->chat( $entree, array( 'visiteur' => 'ip:a' ) );
+			assertSameValue( 400, $result['status'], $name . ' is refused with 400' );
+		}
+		assertSameValue( 0, $capture->calls, 'provider never called' );
+		assertSameValue( 200, $handler->chat( array( 'message' => str_repeat( 'a', 500 ) ), array( 'visiteur' => 'ip:a' ) )['status'], '500 characters accepted' );
+		assertSameValue( 1, $capture->calls, 'valid message reaches the provider' );
+		$long = array( array( 'role' => 'assistant', 'content' => str_repeat( 'é', 5000 ) ) );
+		assertSameValue( 200, $handler->chat( array( 'message' => 'ok', 'historique' => $long ), array( 'visiteur' => 'ip:a' ) )['status'], 'long assistant reply in history is truncated, not refused' );
+	}
+);
+
+$run(
+	'public chat: history is bounded and ignored when disabled',
+	static function (): void {
+		list( $handler, $capture ) = publicHandler( array( 'history_max_messages' => 2 ) );
+		$handler->chat( array( 'message' => 'Q', 'historique' => alternating( 6 ) ), array( 'visiteur' => 'ip:a' ) );
+		assertSameValue( 3, count( sentMessages( $capture->payload ) ), 'only the last messages plus the question are sent' );
+		list( $off, $capture_off ) = publicHandler( array( 'history_enabled' => 0 ) );
+		$off->chat( array( 'message' => 'Q', 'historique' => alternating( 4 ) ), array( 'visiteur' => 'ip:a' ) );
+		assertSameValue( 1, count( sentMessages( $capture_off->payload ) ), 'history ignored when disabled' );
+	}
+);
+
+$run(
+	'public chat: burst guard and usage limit answer 429 without calling the provider',
+	static function (): void {
+		$allowed = array( true, false );
+		list( $handler, $capture ) = publicHandler( array(), static function ( string $identite ) use ( &$allowed ): bool {
+			return (bool) array_shift( $allowed );
+		} );
+		assertSameValue( 200, $handler->chat( array( 'message' => 'a' ), array( 'visiteur' => 'ip:a' ) )['status'], 'first message passes' );
+		$fast = $handler->chat( array( 'message' => 'b' ), array( 'visiteur' => 'ip:a' ) );
+		assertSameValue( 429, $fast['status'], 'second message too fast' );
+		assertSameValue( 'wpia_too_fast', $fast['body']['code'], 'burst code' );
+		assertSameValue( 1, $capture->calls, 'no call for the refused burst' );
+
+		list( $limited, $capture_limited ) = publicHandler( array( 'max_messages_user' => 1 ) );
+		assertSameValue( 200, $limited->chat( array( 'message' => 'a' ), array( 'visiteur' => 'ip:a' ) )['status'], 'within quota' );
+		$refused = $limited->chat( array( 'message' => 'b' ), array( 'visiteur' => 'ip:a' ) );
+		assertSameValue( 429, $refused['status'], 'quota reached' );
+		assertSameValue( 'wpia_limit_reached', $refused['body']['code'], 'limit code' );
+		assertSameValue( 1, $capture_limited->calls, 'no provider call once the limit is reached' );
+	}
+);
+
+$run(
+	'public chat: provider errors are generic and hostile output is neutralised',
+	static function (): void {
+		list( $handler ) = publicHandler();
+		$GLOBALS['wpia_http_callback'] = static fn( string $url, array $args ): array => response( 500, 'secret-provider-detail test-secret-never-log' );
+		$failure = $handler->chat( array( 'message' => 'a' ), array( 'visiteur' => 'ip:a' ) );
+		assertSameValue( 503, $failure['status'], 'provider failure is a 503' );
+		assertTrue( ! str_contains( json_encode( $failure['body'] ), 'secret' ), 'no provider detail nor key leaked' );
+
+		list( $handler ) = publicHandler();
+		setReply( '<script>alert(1)</script> [x](javascript:alert(1)) <img src=x onerror=alert(1)>' );
+		$html = $handler->chat( array( 'message' => 'a' ), array( 'visiteur' => 'ip:b' ) )['body']['html'];
+		assertTrue( ! str_contains( $html, '<script' ) && ! str_contains( $html, '<img' ) && ! str_contains( $html, '<a ' ), 'script, img and javascript: link neutralised' );
+	}
+);
+
+assertSameValue( 111, $tests, 'total passing test count' );
 echo "All {$tests} tests passed.\n";

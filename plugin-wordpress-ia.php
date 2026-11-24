@@ -50,5 +50,6 @@ add_action(
 		( new WPIA\Admin\AdminController() )->register();
 		( new WPIA\Service\LogRetentionManager() )->register();
 		( new WPIA\Service\Usage\UsageRetentionManager() )->register();
+		( new WPIA\Front\PublicChatController() )->register();
 	}
 );

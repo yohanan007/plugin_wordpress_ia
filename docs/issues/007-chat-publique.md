@@ -17,7 +17,7 @@
 
 ## Critique
 
-**Correspondance GitHub :** à créer ou à vérifier.
+**Correspondance GitHub :** #12 (branche `12-fournir-linterface-de-chat-publique-wordpress`).
 
 - **Dépendances fausses** : « issues 1, 2, 3 et 4 » renvoient à une numérotation interne qui ne correspond ni aux fichiers ni à GitHub. Les vraies dépendances sont 005 (limites), 006 (contexte), 008 (multi-tours) et 009 (cadrage). La persistance (0004 / #10) **n'est pas** nécessaire au MVP.
 - **Piège non anticipé : cache de page et nonce.** `claude.md` impose un nonce `wp_rest`. Si le nonce est écrit dans le HTML de la page et que le site utilise un cache de page (WP Super Cache, LiteSpeed, cache de l'hébergeur), les visiteurs reçoivent un nonce périmé au bout de 12 à 24 h, et le chat renvoie des erreurs 403 sans raison apparente. Il faut récupérer le nonce **à l'ouverture du chat**, par une requête non mise en cache.
@@ -54,8 +54,8 @@ Un visiteur peut discuter, depuis n'importe quelle page du site, avec le chatbot
 
 ### Tâches
 
-1. **`PublicChatController`** (`src/Front/`, nouveau dossier pour séparer front-office et admin) : shortcode, enregistrement conditionnel des assets, routes REST.
-2. **`chat.js`** :
+1. **`PublicChatController`** (`src/Front/`, nouveau dossier pour séparer front-office et admin) : shortcode, enregistrement conditionnel des assets, routes REST. **Routes livrées le 2026-11-24** : la logique est dans `PublicChatHandler` (tableaux en entrée et en sortie, 6 tests), le contrôleur ne fait que le lien WordPress (routes, cookie `wpia_session` aléatoire, `Cache-Control: no-store`, `wp_kses`, anti-rafale par transient) et n'est **pas testé automatiquement** (à vérifier dans WordPress). Réglage `max_message_length` (500, bornes 20 à 2000) ajouté. **Shortcode et chargement conditionnel des assets livrés le même jour** (`renderShortcode`, `enqueueAssets` ; un administrateur voit un message si le chat n'est pas affiché). Point d'attention : une requête REST sans nonce est anonyme pour WordPress ; `GET session` valide donc le cookie `logged_in` avant de créer le nonce, sinon un utilisateur connecté recevrait un nonce d'anonyme et aurait un 403 à l'envoi.
+2. **`chat.js`** (**livré le 2026-11-24 avec `chat.css`, tâches 2 à 5, non testé : ni WordPress ni Node n'étaient disponibles ; à vérifier au navigateur**, voir les critères d'acceptation) :
    - widget (bouton d'ouverture, panneau, liste de messages, zone de saisie) ;
    - états : chargement (indicateur, bouton désactivé), erreur, limite atteinte (saisie désactivée jusqu'au lendemain) ;
    - historique dans `sessionStorage` ;
@@ -63,8 +63,8 @@ Un visiteur peut discuter, depuis n'importe quelle page du site, avec le chatbot
 3. **Accessibilité** : liste des messages en `role="log"` avec `aria-live="polite"` ; `Entrée` envoie, `Maj+Entrée` passe à la ligne ; `Échap` ferme le panneau et rend le focus au bouton d'ouverture ; libellés sur tous les contrôles ; contraste AA.
 4. **Mobile** : panneau en plein écran sous 600 px de large ; la zone de saisie reste visible quand le clavier virtuel est ouvert.
 5. **Contenu** : message d'accueil et questions suggérées (cliquables) issus de 009 ; mention « Réponses générées par une IA, elles peuvent contenir des erreurs » ; lien vers la politique de confidentialité si elle est définie.
-6. **Convertisseur Markdown** minimal (`src/Service/MarkdownRenderer.php`), suivi de `wp_kses`.
-7. **Documentation** : `documentation/chat-public.md` (shortcode, attributs, compatibilité avec le cache de page, personnalisation CSS par variables).
+6. **Convertisseur Markdown** minimal (`src/Service/MarkdownRenderer.php`), suivi de `wp_kses`. **Livré le 2026-11-24** : classe pure qui échappe tout le texte avant de le baliser (aucun HTML du modèle ne survit), titres rendus en gras, listes sans imbrication, liens `http`/`https`/`mailto` seulement avec `rel` et `target` imposés ; 3 tests (syntaxe, entrées hostiles, liens). Reste au contrôleur : `OutputGuard` **avant** le rendu, puis `wp_kses()` après.
+7. **Documentation** : `documentation/chat-public.md` (shortcode, attributs, compatibilité avec le cache de page, personnalisation CSS par variables). **Livrée le 2026-11-24** (guide de l'administrateur, vie privée, API REST et sécurité pour les développeurs).
 
 ### Hors périmètre
 
