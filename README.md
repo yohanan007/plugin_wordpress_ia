@@ -104,6 +104,13 @@ est renvoyé au fournisseur, et sa taille. L'estimation des limites porte sur le
 prompt complet, documents compris. Voir `documentation/generation-ia.md` et
 `documentation/limites.md`.
 
+## Chat public
+
+Le shortcode `[wpia_chat]` affiche le chat sur une page, une fois « Afficher le
+chatbot » coché dans les réglages. Le nonce est demandé à l'ouverture du chat, ce qui
+rend l'interface compatible avec les caches de page. Voir
+`documentation/chat-public.md`.
+
 ## Tests
 
 ```sh
