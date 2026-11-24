@@ -13,22 +13,22 @@ Les noms de fichiers, les titres internes et les numéros GitHub ne suivent pas 
 | [0003-service-ia.md](0003-service-ia.md) | Service de génération IA | #8 | `8-ajouter-la-génération-ia-via-les-fournisseurs-configurés` | Livrée |
 | [0004-prompt-initiale.md](0004-prompt-initiale.md) | **Persistance des conversations** (malgré le nom) | #10 | `10-persister-et-protéger-les-conversations` | **À faire**, facultative pour le MVP |
 | [005-appliquer_limite.md](005-appliquer_limite.md) | Limites de consommation | #11 | `11-appliquer-les-limites-de-consommation` | Livrée (PR #16) |
-| [006-markdown.md](006-markdown.md) | Assemblage de la requête IA : prompts, Markdown de contexte et Markdown complet. **Lot A** : indexation des documents ; **lot B** : assemblage | à créer | `9-exploiter-les-documents-markdown-comme-contexte` | **En cours.** **Lot A livré** (2026-11-20) : `MarkdownSectionizer`, `KeywordNormalizer`, `DocumentIndexer`, table `wpia_document_section` (schéma 1.3.0). **Lot B à faire** : 008 est livrée, il reste 009 lot A |
-| [007-chat-publique.md](007-chat-publique.md) | Chat public (shortcode et REST) | à créer | — | **À faire.** Débloquée techniquement par 008 (livrée) ; dépend encore de 006 lot B et 009 lot B pour un chat cadré et contextualisé |
+| [006-markdown.md](006-markdown.md) | Assemblage de la requête IA : prompts, Markdown de contexte et Markdown complet. **Lot A** : indexation des documents ; **lot B** : assemblage | à créer | `9-exploiter-les-documents-markdown-comme-contexte` | **Lot A livré** (2026-11-20) : `MarkdownSectionizer`, `KeywordNormalizer`, `DocumentIndexer`, table `wpia_document_section` (schéma 1.3.0). **Lot B livré** (2026-11-23) : `PromptAssembler`, `ContextBuilder`, rôle contexte/complet (schéma 1.4.0), branché dans `generateChat()` |
+| [007-chat-publique.md](007-chat-publique.md) | Chat public (shortcode et REST) | à créer | — | **À faire.** Débloquée techniquement par 008 (livrée) ; dépend encore de 009 (reste du lot A et lot B) pour un chat cadré et contextualisé |
 | [008-generation-multitours.md](008-generation-multitours.md) | Génération multi-tours (historique, prompt système, cache de prompt) | à créer | — | **Livrée** (2026-11-23, lots A et B) : `generateChat()`, historique configurable (option « Conserver l'historique »), limiteur sur toutes les entrées, cache Anthropic et comptage des tokens en cache. Le cache ne servira vraiment qu'avec le contexte volumineux de 006 lot B |
-| [009-cadrage-garde-fous.md](009-cadrage-garde-fous.md) et [009-cadrage-garde-fous-2.md](009-cadrage-garde-fous-2.md) | Cadrage du sujet, garde-fous, jeu d'évaluation (le fichier `-2` liste le reste à faire après la partie 1) | à créer | — | **En cours.** **Partie 1 livrée** : `TokenEstimator`, `CadrageValidator`, `PromptBuilder` (classes pures, non branchées). **Lot A à faire** (migration 1.3.0 des colonnes de cadrage, admin, documentation : sans dépendance). **Lot B à faire** (branchement et jeu d'évaluation : après 006 lot B) |
+| [009-cadrage-garde-fous.md](009-cadrage-garde-fous.md) et [009-cadrage-garde-fous-2.md](009-cadrage-garde-fous-2.md) | Cadrage du sujet, garde-fous, jeu d'évaluation (le fichier `-2` liste le reste à faire après la partie 1) | à créer | — | **En cours.** **Partie 1 livrée** : `TokenEstimator`, `CadrageValidator`, `PromptBuilder` (classes pures, non branchées). **Lot A, tâches 1 et 2 livrées** (2026-11-24) : migration 1.5.0 (7 colonnes de cadrage, marqueurs témoins, `ChatbotRepository`) et réglage `prompt_admin_max_tokens`. **Tâche 3 livrée** : 3a (enregistrement : `CadrageSanitizer`, refus par champ) et 3b (formulaire, aperçu, avertissements, compteur JS), à vérifier manuellement dans WordPress. **Lot A terminé** (documentation `cadrage.md` livrée). **Lot B à faire** (branchement de `PromptBuilder`, contrôle de sortie, jeu d'évaluation : débloqué) |
 | [010-rgpd-desinstallation.md](010-rgpd-desinstallation.md) | RGPD, `uninstall.php`, clé de chiffrement | à créer | — | **À faire** (aucun `uninstall.php`) |
 | [011-cache-reponses.md](011-cache-reponses.md) | Cache des réponses fréquentes | à créer | — | **À faire**, priorité basse (après le MVP) |
 
 > Attention : les fichiers `010-…` et `011-…` **ne correspondent pas** aux issues GitHub #10 et #11. C'est une raison de plus pour nommer les futurs fichiers d'après le numéro GitHub, une fois l'issue créée.
 
-## Avancement au 2026-11-23
+## Avancement au 2026-11-24
 
 | Livré | Reste à faire |
 |---|---|
-| 0001, 0002, 0003, 005, **008** (lots A et B), 006 lot A, 009 partie 1 | 009 lot A, puis 006 lot B, puis 009 lot B, puis 007 (MVP) ; 010 ; après le MVP : 0004 et 011 |
+| 0001, 0002, 0003, 005, 008, 006 (lots A et B), 009 partie 1, migration et réglage (lot A, tâches 1 et 2) | 009 : exécution réelle du jeu d'évaluation (18/20) et vérification manuelle dans WordPress, puis 009 lot B, puis 007 (MVP) ; 010 ; après le MVP : 0004 et 011 |
 
-Prochaine étape recommandée : **009 lot A** (sans dépendance), puis **006 lot B**.
+Prochaine étape recommandée : **009 : lancer le jeu d'évaluation avec un vrai modèle** (`tests/evaluation/README.md`) et vérifier à la main l'admin dans WordPress ; le code du lot B est livré, puis **009 lot B**.
 
 ## Ordre recommandé (MVP d'abord)
 

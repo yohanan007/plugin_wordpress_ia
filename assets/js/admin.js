@@ -1,4 +1,24 @@
 document.addEventListener('DOMContentLoaded', function () {
+	// Compteur de tokens des consignes : même estimation que le serveur
+	// (TokenEstimator : caractères / 4, arrondi au supérieur).
+	const prompt = document.getElementById('wpia-system-prompt');
+	const counter = document.getElementById('wpia-system-prompt-counter');
+	if (prompt && counter) {
+		const max = parseInt(prompt.dataset.maxTokens || '0', 10);
+		const initial = counter.textContent;
+		const update = function () {
+			const tokens = Math.ceil(Array.from(prompt.value.trim()).length / 4);
+			counter.textContent = tokens + ' / ' + max + ' tokens (estimation)';
+			counter.style.color = tokens > max ? '#b32d2e' : '';
+		};
+		prompt.addEventListener('input', update);
+		if (prompt.value !== '') {
+			update();
+		} else {
+			counter.textContent = initial;
+		}
+	}
+
 	const provider = document.getElementById('wpia-provider');
 	const button = document.getElementById('wpia-load-provider-defaults');
 	const url = document.getElementById('wpia-provider-url');

@@ -38,6 +38,15 @@ la sauvegarde de la référence active ; les fournisseurs, comptes et chatbots
 restent dans leurs tables métier. La clé API n'est jamais conservée dans cette
 option WordPress.
 
+La migration du schéma `1.5.0` ajoute à chaque chatbot les champs de cadrage
+(sujet, ton, langue, messages d'accueil et hors sujet, questions suggérées) et un
+marqueur témoin distinct, attribué aux chatbots existants. Ces champs se règlent dans « Configuration IA »
+(section « Cadrage du chatbot », avec un aperçu du prompt) ; ils sont intégrés au
+prompt système envoyé à l'IA. Une réponse qui contient le marqueur
+témoin (fuite du prompt) ou le jeton interne `[[HORS_SUJET]]` est remplacée par la
+réponse hors sujet du chatbot et journalisée sans contenu (catégorie `securite`).
+Voir `documentation/cadrage.md` pour rédiger ces champs.
+
 La migration du schéma `1.1.0` ajoute aux documents leur taille en octets, leur
 date d'ajout et l'état de validation du texte, ainsi qu'une table applicative
 de journaux. Les anciennes lignes de documents conservent une date inconnue
@@ -101,6 +110,7 @@ prompt complet, documents compris. Voir `documentation/generation-ia.md` et
 php tests/run.php
 ```
 
-Les tests s'exécutent sans WordPress.
+Les tests s'exécutent sans WordPress. Le jeu d'évaluation du cadrage, qui appelle
+un vrai modèle, se lance à la main : voir `tests/evaluation/README.md`.
 
 L'avancement des évolutions est suivi dans `docs/issues/README.md`.

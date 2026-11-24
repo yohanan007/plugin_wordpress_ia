@@ -15,6 +15,7 @@ use WPIA\Service\Ia\Fournisseur\MistralProvider;
 use WPIA\Service\Ia\Fournisseur\OllamaProvider;
 use WPIA\Service\Ia\Fournisseur\OpenAiProvider;
 use WPIA\Repository\LimiteUtilisationRepository;
+use WPIA\Service\Prompt\OutputGuard;
 use WPIA\Service\Prompt\PromptAssembler;
 use WPIA\Service\Prompt\TokenEstimator;
 use WPIA\Service\Securite\SecretCipher;
@@ -79,7 +80,8 @@ class AiGenerationService {
 	 *        messages   : conversation, le dernier message étant la question (rôle user).
 	 *        chatbot_id : facultatif ; doit être le chatbot actif (MVP).
 	 *        identites  : même contenu que le `$contexte` de generate().
-	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int}}|\WP_Error
+	 * @return array{content:string,model:string,usage:array{input_tokens:?int,output_tokens:?int,total_tokens:?int},remplacee?:bool}|\WP_Error
+	 *         `remplacee` n'est présent (à true) que si le contrôle de sortie a remplacé la réponse : ne jamais la mettre en cache.
 	 */
 	public function generateChat( array $requete ): array|\WP_Error {
 		$messages = $this->validerMessages( $requete['messages'] ?? null );
@@ -189,7 +191,36 @@ class AiGenerationService {
 
 		$this->limiter->confirmer( $reservation, $result['usage']['total_tokens'] );
 
+		// Contrôle de sortie, avant tout retour (donc avant toute mise en cache, 011).
+		// Les tokens ont été facturés : ils restent comptés même si la réponse est remplacée.
+		$controle = ( new OutputGuard() )->controler( $result['content'], $config['chatbot'] );
+		if ( $controle['remplacee'] ) {
+			$result['content']   = $controle['content'];
+			$result['remplacee'] = true;
+			$this->logOutputControl( $config['chatbot_id'], (string) $controle['motif'] );
+		}
+
 		return $result;
+	}
+
+	/**
+	 * Journalise un remplacement par le contrôle de sortie, sans aucun contenu
+	 * de la réponse ni du prompt.
+	 */
+	private function logOutputControl( int $chatbot_id, string $motif ): void {
+		if ( null === $this->wpdb ) {
+			return;
+		}
+
+		$niveau  = OutputGuard::MOTIF_MARQUEUR === $motif ? 'warning' : 'info';
+		$message = OutputGuard::MOTIF_MARQUEUR === $motif
+			? 'Prompt marker found in a response (chatbot ' . $chatbot_id . '): response replaced.'
+			: 'Off-topic token found in a response (chatbot ' . $chatbot_id . '): response replaced.';
+		try {
+			( new LogRepository( $this->wpdb ) )->create( $niveau, 'securite', $message );
+		} catch ( RuntimeException $exception ) {
+			error_log( 'WPIA: unable to log the output control.' );
+		}
 	}
 
 	/**

@@ -5,7 +5,7 @@
 
 ## Ce que la partie 1 a livré
 
-Trois classes pures, sans WordPress, testées dans `tests/run.php` (40 tests) :
+Trois classes pures, sans WordPress, testées dans `tests/run.php` :
 
 - `WPIA\Service\Prompt\TokenEstimator` : `estimer()` et `caracteres()`.
 - `WPIA\Service\Prompt\CadrageValidator` : `valider( $brut, $actuel, $max_tokens_consignes )` renvoie `{valeurs, erreurs}` ; `consignesTropLongues()`.
@@ -24,19 +24,19 @@ Aucune migration, aucun écran, aucun branchement : rien n'est encore utilisé p
 | Réponse hors sujet par défaut | Le texte par défaut (traduit) est pré-rempli par le contrôleur, pas par le validateur. |
 | Garde `ABSPATH` | Absente des nouveaux fichiers, comme dans le reste de `src/` ; les tests ne définissent pas `ABSPATH`. À traiter dans un lot séparé. |
 
-**Dépend de :** partie 1 (faite) · lot B : [008](008-generation-multitours.md) et [006](006-markdown.md) lot B · **Utilisée par :** [007](007-chat-publique.md), [011](011-cache-reponses.md)
+**Dépend de :** partie 1 (faite) · lot B : [008](008-generation-multitours.md) (livrée) et [006](006-markdown.md) lot B (`PromptAssembler` déjà branché dans `generateChat()`) · **Utilisée par :** [007](007-chat-publique.md), [011](011-cache-reponses.md)
 
 ## Tâches
 
 ### Lot A : migration, administration, documentation (aucune dépendance)
 
-1. **Migration** (`WPIA_DB_VERSION` passe de 1.2.0 à 1.3.0, dans `plugin-wordpress-ia.php`) :
+1. **Migration** (`WPIA_DB_VERSION` passe de 1.4.0 à 1.5.0, dans `plugin-wordpress-ia.php` ; 1.3.0 et 1.4.0 appartiennent à l'issue 006) **: livrée le 2026-11-24** :
    - colonnes de `wpia_chatbot` dans `DatabaseInstaller`, en `varchar` (une colonne `text` ne peut pas avoir de valeur par défaut en MySQL 5.7) : `sujet` (200), `ton` (20, défaut `neutre`), `langue` (20, défaut `visiteur`), `message_accueil` (300), `message_hors_sujet` (300), `questions_suggerees` (1000, JSON), `marqueur_temoin` (32) ; `NOT NULL DEFAULT ''` sauf indication contraire ;
-   - méthode dédiée `migrateChatbotMarkers()`, sur le modèle de `migrateUsageTable()` : donne un marqueur distinct (`wpia-` + `bin2hex( random_bytes( 8 ) )`) aux chatbots qui n'en ont pas, sans effet si on la relance ;
-   - les 7 colonnes sont ajoutées à `$columns` de `ChatbotRepository` ;
+   - méthode dédiée `migrateChatbotMarkers()` (publique, testée, exécutée à chaque installation car idempotente) : donne un marqueur distinct (`wpia-` + `bin2hex( random_bytes( 8 ) )`) aux chatbots qui n'en ont pas, sans effet si on la relance ;
+   - les 7 colonnes sont ajoutées à `$columns` de `ChatbotRepository` (fait) ;
    - l'entité `Chatbot` reçoit les nouveaux champs, **si elle est utilisée** à ce stade ; sinon la tâche est reportée, voir « Décisions ».
-2. **Réglage** `prompt_admin_max_tokens` dans `AdminSettings` : 1 000 par défaut, bornes 100 à 10 000.
-3. **Administration** (`AdminController::renderAIConfiguration` et `sanitizeAIConfiguration`) :
+2. **Réglage** `prompt_admin_max_tokens` dans `AdminSettings` : 1 000 par défaut, bornes 100 à 10 000 **: livrée le 2026-11-24** (champ numérique généré avec les autres réglages de la page « Limites »).
+3. **Administration** (`AdminController::renderAIConfiguration` et `sanitizeAIConfiguration`). **Étape 3a livrée le 2026-11-24 (enregistrement)** : classe `WPIA\Admin\CadrageSanitizer` (validation, nettoyage, messages, marqueur, réponse hors sujet par défaut), appelée par `sanitizeAIConfiguration`, le contrôle de `system_prompt` est sorti du refus global ; 4 tests. **Étape 3b livrée le 2026-11-24 (affichage)** : champs du formulaire, libellé « Consignes complémentaires », aperçu des blocs [1] et [2] (`CadrageApercu`, sans marqueur), avertissements, compteur JS ; 1 test. La vérification manuelle dans un WordPress local reste à faire (critères d'acceptation). Détail :
    - section « Cadrage du chatbot » avec les champs de cadrage ; « Instructions système » est renommé « Consignes complémentaires » ;
    - `sanitizeAIConfiguration` appelle `CadrageValidator` sur le texte brut (`wp_unslash()` seulement), traduit chaque code d'erreur en message (`add_settings_error`, un par champ), puis nettoie les valeurs acceptées ;
    - le contrôle de longueur de `system_prompt` sort du refus global actuel : des consignes refusées n'empêchent plus l'enregistrement du fournisseur, du compte et du modèle ;
@@ -45,12 +45,12 @@ Aucune migration, aucun écran, aucun branchement : rien n'est encore utilisé p
    - avertissements : « Cadrage incomplet » (sujet vide) et consignes trop longues ;
    - réponse hors sujet pré-remplie avec le texte par défaut traduit ;
    - `assets/js/admin.js` : compteur de tokens des consignes, avec la limite affichée.
-4. **Documentation** : `documentation/cadrage.md`, avec des conseils de rédaction des champs et un exemple complet pour un CV.
+4. **Documentation** : `documentation/cadrage.md`, avec des conseils de rédaction des champs et un exemple complet pour un CV **: livrée le 2026-11-24** (guide de l'administrateur ; `prompt-cadrage.md`, côté développeur, mis à jour).
 
 ### Lot B : branchement et évaluation (après 008 et 006 lot B)
 
-5. **Branchement** : `PromptBuilder` est appelé par `PromptAssembler` (006), lui-même branché dans `AiGenerationService::generateChat()` (008). Le contrôle de sortie (marqueur, puis jeton `[[HORS_SUJET]]`) se fait dans `generateChat()`, avant toute mise en cache (011).
-6. **Jeu d'évaluation** : `tests/evaluation/questions.md` (environ 20 questions : dans le sujet, hors sujet, piège) et `tests/evaluation/run.php`, lancé à la main, température forcée à 0, comparaison de la réponse brute au comportement attendu, rapport. Exemples dans [009](009-cadrage-garde-fous.md).
+5. **Branchement** : `PromptBuilder` est appelé par `PromptAssembler` (006), lui-même branché dans `AiGenerationService::generateChat()` (008). Le contrôle de sortie (marqueur, puis jeton `[[HORS_SUJET]]`) se fait dans `generateChat()`, avant toute mise en cache (011). **Livré le 2026-11-24** : `PromptBuilder` était déjà branché via `PromptAssembler` ; classe pure `OutputGuard`, appelée après la confirmation des tokens ; la réponse remplacée porte `remplacee => true` (011 ne doit jamais la mettre en cache) ; journal `securite`, sans contenu ; 3 tests.
+6. **Jeu d'évaluation** : `tests/evaluation/questions.md` (environ 20 questions : dans le sujet, hors sujet, piège) et `tests/evaluation/run.php`, lancé à la main, température forcée à 0, comparaison de la réponse brute au comportement attendu, rapport. Exemples dans [009](009-cadrage-garde-fous.md). **Livré le 2026-11-24, sauf l'exécution réelle** : `tests/evaluation/` (`questions.md` à 20 questions, `run.php`, `Evaluateur.php` testé sans réseau, `chatbot-exemple.php`, `cv-exemple.md`, `README.md`) ; le script a été vérifié contre un faux serveur, **pas contre un vrai modèle** : le critère « 18 sur 20 » et le rapport à joindre à la PR restent à obtenir. `ContextBuilder::bloc()` devient publique et statique pour être réutilisée.
 
 ## Hors périmètre
 
