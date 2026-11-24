@@ -19,6 +19,7 @@ use WPIA\Service\Document\ContextBudget;
 use WPIA\Service\Document\DocumentIndexer;
 use WPIA\Service\Document\DocumentStorage;
 use WPIA\Service\Securite\SecretCipher;
+use WPIA\Service\Prompt\CadrageValidator;
 use WPIA\Service\Prompt\TokenEstimator;
 use WPIA\Service\Usage\UsageLimiter;
 
@@ -482,12 +483,14 @@ class AdminController {
 		$account  = $configuration['account'] ?? array();
 		$url      = isset( $provider['url_api'] ) ? (string) $provider['url_api'] : $catalog[ $type ]['url'];
 		$test     = get_option( 'wpia_api_test_result', array() );
+		$max_consignes = (int) AdminSettings::get()['prompt_admin_max_tokens'];
 		?>
 		<div class="wrap wpia-admin">
 			<h1><?php esc_html_e( 'Configuration IA', 'plugin-wordpress-ia' ); ?></h1>
 			<?php $this->renderNotice(); ?>
 			<p><?php esc_html_e( 'Les paramètres initiaux limitent la sortie à 1 024 tokens et utilisent une température basse. Ils ne remplacent jamais une configuration déjà enregistrée.', 'plugin-wordpress-ia' ); ?></p>
 			<?php settings_errors( 'wpia_ai_settings' ); ?>
+			<?php $this->renderCadrageWarnings( $chatbot, $max_consignes ); ?>
 			<form method="post" action="options.php">
 				<?php settings_fields( 'wpia_ai_settings_group' ); ?>
 				<table class="form-table"><tbody>
@@ -504,9 +507,7 @@ class AdminController {
 					<tr><th><label for="wpia-model"><?php esc_html_e( 'Modèle', 'plugin-wordpress-ia' ); ?></label></th>
 						<td><input id="wpia-model" class="regular-text" type="text" name="<?php echo esc_attr( self::CONFIG_OPTION ); ?>[model]" value="<?php echo esc_attr( $chatbot['modele'] ?? $catalog[ $type ]['model'] ); ?>" required /></td>
 					</tr>
-					<tr><th><label for="wpia-system-prompt"><?php esc_html_e( 'Instructions système', 'plugin-wordpress-ia' ); ?></label></th>
-						<td><textarea id="wpia-system-prompt" class="large-text" rows="5" name="<?php echo esc_attr( self::CONFIG_OPTION ); ?>[system_prompt]"><?php echo esc_textarea( $chatbot['system_prompt'] ?? '' ); ?></textarea></td>
-					</tr>
+					<?php $this->renderCadrageFields( $chatbot, $max_consignes ); ?>
 					<tr><th><label for="wpia-max-tokens"><?php esc_html_e( 'Tokens maximum par réponse', 'plugin-wordpress-ia' ); ?></label></th>
 						<td><input id="wpia-max-tokens" type="number" min="1" max="128000" name="<?php echo esc_attr( self::CONFIG_OPTION ); ?>[max_tokens]" value="<?php echo esc_attr( (string) ( $chatbot['max_tokens'] ?? 1024 ) ); ?>" /></td>
 					</tr>
@@ -524,6 +525,7 @@ class AdminController {
 				<button type="button" class="button" id="wpia-load-provider-defaults"><?php esc_html_e( 'Charger explicitement les valeurs par défaut du fournisseur', 'plugin-wordpress-ia' ); ?></button>
 				<?php submit_button( __( 'Enregistrer la configuration', 'plugin-wordpress-ia' ) ); ?>
 			</form>
+			<?php $this->renderCadragePreview( $chatbot ); ?>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
 				<input type="hidden" name="action" value="wpia_test_ai" />
 				<?php wp_nonce_field( 'wpia_test_ai' ); ?>
@@ -534,6 +536,138 @@ class AdminController {
 			<?php endif; ?>
 			<p><?php esc_html_e( 'Le test contacte le point de terminaison de liste des modèles du fournisseur ; il ne génère pas de réponse IA.', 'plugin-wordpress-ia' ); ?></p>
 		</div>
+		<?php
+	}
+
+	/**
+	 * Avertissements de cadrage : sujet vide (le prompt utilise alors un sujet
+	 * générique) et consignes enregistrées plus longues que la limite actuelle.
+	 *
+	 * @param array<string, mixed> $chatbot Ligne enregistrée (vide si aucun chatbot).
+	 */
+	private function renderCadrageWarnings( array $chatbot, int $max_consignes ): void {
+		if ( empty( $chatbot ) ) {
+			return;
+		}
+		if ( '' === trim( (string) ( $chatbot['sujet'] ?? '' ) ) ) :
+			?>
+			<div class="notice notice-warning inline"><p><strong><?php esc_html_e( 'Cadrage incomplet', 'plugin-wordpress-ia' ); ?></strong> — <?php esc_html_e( 'aucun sujet n’est défini : le chatbot répond sur « le contenu présenté sur ce site », ce qui le cadre mal. Renseignez le sujet ci-dessous.', 'plugin-wordpress-ia' ); ?></p></div>
+			<?php
+		endif;
+		if ( ( new CadrageValidator() )->consignesTropLongues( (string) ( $chatbot['system_prompt'] ?? '' ), $max_consignes ) ) :
+			?>
+			<div class="notice notice-warning inline"><p><?php
+				/* translators: %d: maximum number of tokens. */
+				echo esc_html( sprintf( __( 'Les consignes complémentaires enregistrées dépassent la limite de %d tokens. Elles sont toujours envoyées, mais toute nouvelle valeur trop longue sera refusée : raccourcissez-les.', 'plugin-wordpress-ia' ), $max_consignes ) );
+			?></p></div>
+			<?php
+		endif;
+	}
+
+	/**
+	 * Lignes du formulaire pour les champs de cadrage et les consignes.
+	 *
+	 * @param array<string, mixed> $chatbot Ligne enregistrée (vide si aucun chatbot).
+	 */
+	private function renderCadrageFields( array $chatbot, int $max_consignes ): void {
+		$name      = esc_attr( self::CONFIG_OPTION );
+		$hors_sujet = '' !== trim( (string) ( $chatbot['message_hors_sujet'] ?? '' ) )
+			? (string) $chatbot['message_hors_sujet']
+			: CadrageSanitizer::messageHorsSujetParDefaut();
+		$questions = json_decode( (string) ( $chatbot['questions_suggerees'] ?? '' ), true );
+		$questions = is_array( $questions ) ? array_values( array_map( 'strval', $questions ) ) : array();
+		$ton       = (string) ( $chatbot['ton'] ?? CadrageValidator::TON_DEFAUT );
+		$langue    = (string) ( $chatbot['langue'] ?? CadrageValidator::LANGUE_DEFAUT );
+		$tons      = array(
+			'formel'     => __( 'Formel', 'plugin-wordpress-ia' ),
+			'neutre'     => __( 'Neutre', 'plugin-wordpress-ia' ),
+			'chaleureux' => __( 'Chaleureux', 'plugin-wordpress-ia' ),
+		);
+		$langues   = array(
+			'visiteur' => __( 'Celle du visiteur', 'plugin-wordpress-ia' ),
+			'fr'       => __( 'Français', 'plugin-wordpress-ia' ),
+			'en'       => __( 'Anglais', 'plugin-wordpress-ia' ),
+		);
+		?>
+		<tr><th colspan="2"><h2 class="title"><?php esc_html_e( 'Cadrage du chatbot', 'plugin-wordpress-ia' ); ?></h2></th></tr>
+		<tr><th><label for="wpia-sujet"><?php esc_html_e( 'Sujet', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><input id="wpia-sujet" class="large-text" type="text" maxlength="<?php echo esc_attr( (string) CadrageValidator::SUJET_MAX ); ?>" name="<?php echo $name; ?>[sujet]" value="<?php echo esc_attr( (string) ( $chatbot['sujet'] ?? '' ) ); ?>" />
+				<p class="description"><?php esc_html_e( 'Obligatoire. Ce dont le chatbot a le droit de parler, par exemple « le parcours professionnel de Marie Dupont ».', 'plugin-wordpress-ia' ); ?></p></td>
+		</tr>
+		<tr><th><label for="wpia-ton"><?php esc_html_e( 'Ton', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><select id="wpia-ton" name="<?php echo $name; ?>[ton]">
+				<?php foreach ( $tons as $valeur => $libelle ) : ?>
+					<option value="<?php echo esc_attr( $valeur ); ?>" <?php selected( $ton, $valeur ); ?>><?php echo esc_html( $libelle ); ?></option>
+				<?php endforeach; ?>
+			</select></td>
+		</tr>
+		<tr><th><label for="wpia-langue"><?php esc_html_e( 'Langue des réponses', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><select id="wpia-langue" name="<?php echo $name; ?>[langue]">
+				<?php foreach ( $langues as $valeur => $libelle ) : ?>
+					<option value="<?php echo esc_attr( $valeur ); ?>" <?php selected( $langue, $valeur ); ?>><?php echo esc_html( $libelle ); ?></option>
+				<?php endforeach; ?>
+			</select></td>
+		</tr>
+		<tr><th><label for="wpia-message-accueil"><?php esc_html_e( 'Message d’accueil', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><input id="wpia-message-accueil" class="large-text" type="text" maxlength="<?php echo esc_attr( (string) CadrageValidator::MESSAGE_MAX ); ?>" name="<?php echo $name; ?>[message_accueil]" value="<?php echo esc_attr( (string) ( $chatbot['message_accueil'] ?? '' ) ); ?>" /></td>
+		</tr>
+		<tr><th><label for="wpia-message-hors-sujet"><?php esc_html_e( 'Réponse hors sujet', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><input id="wpia-message-hors-sujet" class="large-text" type="text" maxlength="<?php echo esc_attr( (string) CadrageValidator::MESSAGE_MAX ); ?>" name="<?php echo $name; ?>[message_hors_sujet]" value="<?php echo esc_attr( $hors_sujet ); ?>" />
+				<p class="description"><?php esc_html_e( 'Obligatoire. Affichée telle quelle quand la question sort du sujet.', 'plugin-wordpress-ia' ); ?></p></td>
+		</tr>
+		<tr><th><?php
+			/* translators: %d: maximum number of suggested questions. */
+			echo esc_html( sprintf( __( 'Questions suggérées (%d maximum)', 'plugin-wordpress-ia' ), CadrageValidator::QUESTIONS_MAX ) );
+		?></th>
+			<td>
+				<?php for ( $i = 0; $i < CadrageValidator::QUESTIONS_MAX; $i++ ) : ?>
+					<input class="large-text" type="text" maxlength="<?php echo esc_attr( (string) CadrageValidator::QUESTION_MAX ); ?>" name="<?php echo $name; ?>[questions_suggerees][]" value="<?php echo esc_attr( $questions[ $i ] ?? '' ); ?>" aria-label="<?php echo esc_attr( sprintf( /* translators: %d: question number. */ __( 'Question suggérée %d', 'plugin-wordpress-ia' ), $i + 1 ) ); ?>" />
+				<?php endfor; ?>
+			</td>
+		</tr>
+		<tr><th><label for="wpia-system-prompt"><?php esc_html_e( 'Consignes complémentaires', 'plugin-wordpress-ia' ); ?></label></th>
+			<td><textarea id="wpia-system-prompt" class="large-text" rows="5" data-max-tokens="<?php echo esc_attr( (string) $max_consignes ); ?>" name="<?php echo $name; ?>[system_prompt]"><?php echo esc_textarea( (string) ( $chatbot['system_prompt'] ?? '' ) ); ?></textarea>
+				<p class="description" id="wpia-system-prompt-counter" aria-live="polite"><?php
+					/* translators: %d: maximum number of tokens. */
+					echo esc_html( sprintf( __( 'Limite : %d tokens (estimation).', 'plugin-wordpress-ia' ), $max_consignes ) );
+				?></p>
+				<p class="description"><?php esc_html_e( 'Elles complètent les règles du plugin sans pouvoir les lever.', 'plugin-wordpress-ia' ); ?></p></td>
+		</tr>
+		<?php
+	}
+
+	/**
+	 * Aperçu en lecture seule des blocs [1] et [2] du prompt, d'après les valeurs
+	 * ENREGISTRÉES (pas celles en cours de saisie). Jamais le marqueur témoin.
+	 *
+	 * @param array<string, mixed> $chatbot Ligne enregistrée (vide si aucun chatbot).
+	 */
+	private function renderCadragePreview( array $chatbot ): void {
+		global $wpdb;
+		if ( empty( $chatbot['id'] ) ) {
+			return;
+		}
+
+		try {
+			$documents = ( new ChatbotDocumentRepository( $wpdb ) )->getReadyDocuments( (int) $chatbot['id'] );
+		} catch ( \Throwable $exception ) {
+			$this->log( 'error', 'application', $exception->getMessage() );
+			return;
+		}
+		$apercu = CadrageApercu::construire( $chatbot, (string) get_bloginfo( 'name' ), ! empty( $documents ) );
+		?>
+		<h2><?php esc_html_e( 'Aperçu du prompt (lecture seule)', 'plugin-wordpress-ia' ); ?></h2>
+		<p class="description"><?php esc_html_e( 'Reflète la configuration enregistrée. Les blocs « contexte » et « documents » s’ajoutent ensuite, et une référence interne invisible est ajoutée à l’envoi.', 'plugin-wordpress-ia' ); ?></p>
+		<h3><?php
+			/* translators: %d: estimated token count. */
+			echo esc_html( sprintf( __( '1. Règles du plugin (≈ %d tokens)', 'plugin-wordpress-ia' ), $apercu['tokens']['base'] ) );
+		?></h3>
+		<pre class="wpia-prompt-preview"><?php echo esc_html( $apercu['base'] ); ?></pre>
+		<h3><?php
+			/* translators: %d: estimated token count. */
+			echo esc_html( sprintf( __( '2. Consignes complémentaires (≈ %d tokens)', 'plugin-wordpress-ia' ), $apercu['tokens']['admin'] ) );
+		?></h3>
+		<pre class="wpia-prompt-preview"><?php echo '' === $apercu['admin'] ? esc_html__( '(aucune consigne)', 'plugin-wordpress-ia' ) : esc_html( $apercu['admin'] ); ?></pre>
 		<?php
 	}
 
@@ -776,9 +910,14 @@ class AdminController {
 				? (string) $current_rows['chatbot']['modele']
 				: $catalog[ $type ]['model'];
 		}
-		$prompt     = array_key_exists( 'system_prompt', $input )
-			? sanitize_textarea_field( $this->arrayString( $input, 'system_prompt' ) )
-			: ( $same_provider && ! empty( $current_rows['chatbot']['system_prompt'] ) ? (string) $current_rows['chatbot']['system_prompt'] : '' );
+		// Cadrage et consignes : validés champ par champ (refus ciblé), donc hors du
+		// refus global de l'étape 3. Les champs absents gardent leur valeur actuelle.
+		$chatbot_actuel = is_array( $current_rows['chatbot'] ) ? $current_rows['chatbot'] : array();
+		$cadrage        = ( new CadrageSanitizer() )->traiter(
+			array_intersect_key( wp_unslash( $input ), array_flip( CadrageSanitizer::CHAMPS ) ),
+			$chatbot_actuel,
+			(int) AdminSettings::get()['prompt_admin_max_tokens']
+		);
 		$max_input  = $this->arrayString( $input, 'max_tokens' );
 		$temp_input = $this->arrayString( $input, 'temperature' );
 		$max        = '' !== $max_input ? filter_var( $max_input, FILTER_VALIDATE_INT ) : ( $same_provider && ! empty( $current_rows['chatbot']['max_tokens'] ) ? (int) $current_rows['chatbot']['max_tokens'] : 1024 );
@@ -790,8 +929,8 @@ class AdminController {
 
 		// 3. Validation. filter_var() renvoie false pour une saisie non numérique.
 		// Les longueurs maximales bornent ce qui est stocké en base et envoyé au fournisseur.
-		if ( strlen( $url ) > 2048 || strlen( $model ) > 191 || strlen( $prompt ) > 50000 || strlen( $new_key ) > 4096 || ! $this->validProviderUrl( $type, $url ) || '' === $model || false === $max || $max < 1 || $max > 128000 || false === $temp || $temp < 0 || $temp > 2 ) {
-			add_settings_error( 'wpia_ai_settings', 'wpia_invalid_ai_settings', __( 'Vérifiez l’URL, le modèle, les limites et la température. Le modèle et les instructions doivent respecter les longueurs maximales.', 'plugin-wordpress-ia' ), 'error' );
+		if ( strlen( $url ) > 2048 || strlen( $model ) > 191 || strlen( $new_key ) > 4096 || ! $this->validProviderUrl( $type, $url ) || '' === $model || false === $max || $max < 1 || $max > 128000 || false === $temp || $temp < 0 || $temp > 2 ) {
+			add_settings_error( 'wpia_ai_settings', 'wpia_invalid_ai_settings', __( 'Vérifiez l’URL, le modèle, les limites et la température. Le modèle doit respecter la longueur maximale.', 'plugin-wordpress-ia' ), 'error' );
 			return $this->configurationOption( $current );
 		}
 
@@ -857,11 +996,14 @@ class AdminController {
 					'description'   => '',
 					'compte_api_id' => $account_id,
 					'modele'        => $model,
-					'system_prompt' => $prompt,
 					'max_tokens'    => (int) $max,
 					'temperature'   => (float) $temp,
 					'actif'         => 1,
-				);
+				) + $cadrage['valeurs'];
+				// Le marqueur témoin est posé une fois, jamais remplacé.
+				if ( '' === trim( (string) ( $chatbot_actuel['marqueur_temoin'] ?? '' ) ) ) {
+					$chatbot_data['marqueur_temoin'] = CadrageSanitizer::nouveauMarqueur();
+				}
 				$chatbot_id = $this->saveEntity( $chatbots, (int) ( $ids['chatbot_id'] ?? 0 ), $chatbot_data );
 
 				if ( false === $wpdb->query( 'COMMIT' ) ) {
@@ -879,7 +1021,17 @@ class AdminController {
 
 		// Le dernier test de connexion ne vaut plus pour la nouvelle configuration.
 		delete_option( 'wpia_api_test_result' );
-		add_settings_error( 'wpia_ai_settings', 'wpia_settings_saved', __( 'Configuration enregistrée.', 'plugin-wordpress-ia' ), 'success' );
+		foreach ( $cadrage['messages'] as $champ => $message ) {
+			add_settings_error( 'wpia_ai_settings', 'wpia_cadrage_' . $champ, $message, 'error' );
+		}
+		add_settings_error(
+			'wpia_ai_settings',
+			'wpia_settings_saved',
+			empty( $cadrage['messages'] )
+				? __( 'Configuration enregistrée.', 'plugin-wordpress-ia' )
+				: __( 'Configuration enregistrée, sauf les champs refusés ci-dessus.', 'plugin-wordpress-ia' ),
+			empty( $cadrage['messages'] ) ? 'success' : 'warning'
+		);
 
 		return array(
 			'provider_type' => $type,

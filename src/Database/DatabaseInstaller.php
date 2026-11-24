@@ -28,6 +28,7 @@ class DatabaseInstaller {
 		}
 
 		$this->migrateDocumentsToPending( $wpdb, $previous_version );
+		$this->migrateChatbotMarkers( $wpdb );
 
 		update_option( 'wpia_db_version', WPIA_DB_VERSION );
 	}
@@ -52,6 +53,34 @@ class DatabaseInstaller {
 		);
 		if ( false === $result ) {
 			throw new RuntimeException( 'Unable to flag existing documents for indexing: ' . $wpdb->last_error );
+		}
+	}
+
+	/**
+	 * Migration 1.5.0 (issue 009) : donne un marqueur témoin distinct à chaque
+	 * chatbot qui n'en a pas. Idempotent : les marqueurs déjà posés ne sont jamais
+	 * modifiés, et la condition `marqueur_temoin = ''` est répétée dans l'UPDATE
+	 * pour qu'une exécution concurrente n'écrase rien. Exécutée à chaque
+	 * installation, car elle est sans effet quand tout est en place.
+	 */
+	public function migrateChatbotMarkers( \wpdb $wpdb ): void {
+		$table = $wpdb->prefix . 'wpia_chatbot';
+		$ids   = $wpdb->get_col( "SELECT id FROM {$table} WHERE marqueur_temoin = ''" );
+		if ( ! is_array( $ids ) ) {
+			throw new RuntimeException( 'Unable to read the chatbots without marker: ' . $wpdb->last_error );
+		}
+
+		foreach ( $ids as $id ) {
+			$result = $wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$table} SET marqueur_temoin = %s WHERE id = %d AND marqueur_temoin = ''",
+					'wpia-' . bin2hex( random_bytes( 8 ) ),
+					(int) $id
+				)
+			);
+			if ( false === $result ) {
+				throw new RuntimeException( 'Unable to set the chatbot marker: ' . $wpdb->last_error );
+			}
 		}
 	}
 
@@ -118,6 +147,13 @@ class DatabaseInstaller {
 				system_prompt longtext NOT NULL,
 				max_tokens int(10) unsigned NOT NULL DEFAULT 1024,
 				temperature decimal(5,2) NOT NULL DEFAULT 0.30,
+				sujet varchar(200) NOT NULL DEFAULT '',
+				ton varchar(20) NOT NULL DEFAULT 'neutre',
+				langue varchar(20) NOT NULL DEFAULT 'visiteur',
+				message_accueil varchar(300) NOT NULL DEFAULT '',
+				message_hors_sujet varchar(300) NOT NULL DEFAULT '',
+				questions_suggerees varchar(1000) NOT NULL DEFAULT '',
+				marqueur_temoin varchar(32) NOT NULL DEFAULT '',
 				actif tinyint(1) NOT NULL DEFAULT 1,
 				PRIMARY KEY  (id),
 				KEY compte_api_id (compte_api_id)

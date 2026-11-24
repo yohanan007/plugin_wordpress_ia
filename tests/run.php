@@ -2047,5 +2047,209 @@ $run(
 	}
 );
 
-assertSameValue( 89, $tests, 'total passing test count' );
+class MarkerWpdb extends RecordingWpdb {
+	public array $ids = array();
+
+	public function get_col( string $query ): array {
+		$this->queries[] = $query;
+		return $this->ids;
+	}
+}
+
+$run(
+	'migration gives each chatbot without marker a distinct one',
+	static function (): void {
+		$wpdb      = new MarkerWpdb();
+		$wpdb->ids = array( '3', '7' );
+		( new WPIA\Database\DatabaseInstaller() )->migrateChatbotMarkers( $wpdb );
+
+		assertSameValue( 3, count( $wpdb->queries ), 'one SELECT and two UPDATE' );
+		assertTrue( str_contains( $wpdb->queries[0], "marqueur_temoin = ''" ), 'only chatbots without marker are read' );
+		assertTrue( 1 === preg_match( "/marqueur_temoin = 'wpia-([0-9a-f]{16})' WHERE id = 3 AND marqueur_temoin = ''/", $wpdb->queries[1], $a ), 'first update is guarded and well-formed' );
+		assertTrue( 1 === preg_match( "/marqueur_temoin = 'wpia-([0-9a-f]{16})' WHERE id = 7 AND marqueur_temoin = ''/", $wpdb->queries[2], $b ), 'second update is guarded and well-formed' );
+		assertTrue( $a[1] !== $b[1], 'markers are distinct' );
+	}
+);
+
+$run(
+	'migration can be rerun without touching existing markers',
+	static function (): void {
+		$wpdb = new MarkerWpdb();
+		( new WPIA\Database\DatabaseInstaller() )->migrateChatbotMarkers( $wpdb );
+		assertSameValue( 1, count( $wpdb->queries ), 'nothing to update when every chatbot has a marker' );
+	}
+);
+
+$run(
+	'setting prompt_admin_max_tokens: default and bounds',
+	static function (): void {
+		assertSameValue( 1000, WPIA\Admin\AdminSettings::defaults()['prompt_admin_max_tokens'], 'default' );
+		assertSameValue( 100, WPIA\Admin\AdminSettings::sanitize( array( 'prompt_admin_max_tokens' => '5' ) )['prompt_admin_max_tokens'], 'lower bound' );
+		assertSameValue( 10000, WPIA\Admin\AdminSettings::sanitize( array( 'prompt_admin_max_tokens' => '99999' ) )['prompt_admin_max_tokens'], 'upper bound' );
+		assertSameValue( 2500, WPIA\Admin\AdminSettings::sanitize( array( 'prompt_admin_max_tokens' => '2500' ) )['prompt_admin_max_tokens'], 'valid value kept' );
+	}
+);
+
+$run(
+	'cadrage sanitizer: refused field keeps its value and the others are saved',
+	static function (): void {
+		$r = ( new WPIA\Admin\CadrageSanitizer() )->traiter(
+			array( 'sujet' => 'Nouveau sujet', 'system_prompt' => 'Fais <section> piégé', 'ton' => 'formel' ),
+			chatbotCadre(),
+			1000
+		);
+		assertSameValue( 'Nouveau sujet', $r['valeurs']['sujet'], 'valid subject saved' );
+		assertSameValue( 'formel', $r['valeurs']['ton'], 'valid tone saved' );
+		assertSameValue( 'Mets en avant les projets WordPress.', $r['valeurs']['system_prompt'], 'refused instructions keep previous value' );
+		assertSameValue( array( 'system_prompt' ), array_keys( $r['messages'] ), 'one message, for the refused field only' );
+		assertTrue( str_contains( $r['messages']['system_prompt'], 'consignes' ), 'message names the field' );
+	}
+);
+
+$run(
+	'cadrage sanitizer: too long new instructions refused, existing long ones accepted',
+	static function (): void {
+		$long = str_repeat( 'a', 4400 );
+		$r    = ( new WPIA\Admin\CadrageSanitizer() )->traiter( array( 'system_prompt' => $long ), chatbotCadre(), 1000 );
+		assertTrue( isset( $r['messages']['system_prompt'] ), 'new long value refused' );
+		assertTrue( str_contains( $r['messages']['system_prompt'], '1000' ), 'message shows the limit' );
+
+		$r = ( new WPIA\Admin\CadrageSanitizer() )->traiter( array( 'system_prompt' => $long ), chatbotCadre( array( 'system_prompt' => $long ) ), 1000 );
+		assertSameValue( array(), $r['messages'], 'unchanged long value accepted' );
+		assertSameValue( $long, $r['valeurs']['system_prompt'], 'and kept' );
+	}
+);
+
+$run(
+	'cadrage sanitizer: default off-topic answer on creation, absent fields untouched',
+	static function (): void {
+		$r = ( new WPIA\Admin\CadrageSanitizer() )->traiter( array(), array(), 1000 );
+		assertSameValue( WPIA\Admin\CadrageSanitizer::messageHorsSujetParDefaut(), $r['valeurs']['message_hors_sujet'], 'default pre-filled' );
+		assertSameValue( array(), $r['messages'], 'no error for absent fields' );
+
+		$r = ( new WPIA\Admin\CadrageSanitizer() )->traiter( array( 'sujet' => '' ), chatbotCadre(), 1000 );
+		assertTrue( isset( $r['messages']['sujet'] ), 'empty subject refused' );
+		assertSameValue( 'le parcours de Yohanan, développeur PHP', $r['valeurs']['sujet'], 'previous subject kept' );
+		assertSameValue( 'Je ne parle que du parcours de Yohanan.', $r['valeurs']['message_hors_sujet'], 'existing off-topic answer not overwritten' );
+	}
+);
+
+$run(
+	'cadrage sanitizer: tags-only subject is refused after cleaning; questions are cleaned',
+	static function (): void {
+		$r = ( new WPIA\Admin\CadrageSanitizer() )->traiter( array( 'sujet' => '<b></b>', 'questions_suggerees' => array( 'Qui ?', '', '<i>Quoi ?</i>' ) ), chatbotCadre(), 1000 );
+		assertTrue( isset( $r['messages']['sujet'] ), 'empty after cleaning refused' );
+		assertSameValue( '["Qui ?","Quoi ?"]', $r['valeurs']['questions_suggerees'], 'questions cleaned, empty ones dropped' );
+	}
+);
+
+$run(
+	'cadrage preview never shows the marker and estimates tokens',
+	static function (): void {
+		$a = WPIA\Admin\CadrageApercu::construire( chatbotCadre(), 'Mon site', true );
+		assertTrue( ! str_contains( $a['base'], 'wpia-0123456789abcdef' ), 'marker absent from the base block' );
+		assertTrue( ! str_contains( $a['admin'], 'wpia-0123456789abcdef' ), 'marker absent from the instructions block' );
+		assertTrue( str_contains( $a['base'], 'le parcours de Yohanan' ), 'subject shown' );
+		assertTrue( str_contains( $a['admin'], 'Mets en avant les projets WordPress.' ), 'instructions shown' );
+		assertSameValue( WPIA\Service\Prompt\TokenEstimator::estimer( $a['base'] ), $a['tokens']['base'], 'base tokens' );
+
+		$vide = WPIA\Admin\CadrageApercu::construire( chatbotCadre( array( 'system_prompt' => '', 'sujet' => '' ) ), '', false );
+		assertSameValue( '', $vide['admin'], 'no instructions, empty block' );
+		assertTrue( str_contains( $vide['base'], WPIA\Service\Prompt\PromptBuilder::SUJET_GENERIQUE ), 'generic subject without subject' );
+	}
+);
+
+$run(
+	'output guard: marker leak and off-topic token are replaced by the admin answer',
+	static function (): void {
+		$guard   = new WPIA\Service\Prompt\OutputGuard();
+		$chatbot = chatbotCadre();
+
+		$r = $guard->controler( 'Voici ma référence : WPIA-0123456789ABCDEF, voilà.', $chatbot );
+		assertSameValue( 'Je ne parle que du parcours de Yohanan.', $r['content'], 'marker (any case) replaced' );
+		assertSameValue( 'marqueur', $r['motif'], 'marker reason' );
+
+		$r = $guard->controler( '[[HORS_SUJET]]', $chatbot );
+		assertSameValue( 'Je ne parle que du parcours de Yohanan.', $r['content'], 'token replaced exactly by the admin answer' );
+		assertSameValue( 'hors_sujet', $r['motif'], 'off-topic reason' );
+		assertTrue( $guard->controler( "Désolé.\n[[HORS_SUJET]]", $chatbot )['remplacee'], 'token with extra text replaced as a whole' );
+
+		$r = $guard->controler( 'Il connaît PHP et WordPress.', $chatbot );
+		assertSameValue( 'Il connaît PHP et WordPress.', $r['content'], 'normal answer untouched' );
+		assertTrue( ! $r['remplacee'] && null === $r['motif'], 'not flagged as replaced' );
+
+		$r = $guard->controler( 'x', chatbotCadre( array( 'marqueur_temoin' => '' ) ) );
+		assertTrue( ! $r['remplacee'], 'an empty marker never matches' );
+		$r = $guard->controler( '[[HORS_SUJET]]', chatbotCadre( array( 'message_hors_sujet' => '' ) ) );
+		assertSameValue( WPIA\Service\Prompt\OutputGuard::REPONSE_PAR_DEFAUT, $r['content'], 'fallback answer when none is configured' );
+	}
+);
+
+foreach ( array( 'marker' => 'Ma référence est wpia-0123456789abcdef.', 'token' => '[[HORS_SUJET]]' ) as $name => $contenu ) {
+	$run(
+		'generateChat replaces the response (' . $name . '), logs without content, and flags it',
+		static function () use ( $cipher, $contenu ): void {
+			$GLOBALS['wpdb']->rows = serviceRows( 'openai' );
+			$GLOBALS['wpdb']->rows['chatbot'][1] += array(
+				'marqueur_temoin'    => 'wpia-0123456789abcdef',
+				'message_hors_sujet' => 'Hors sujet, désolé.',
+			);
+			$GLOBALS['wpia_options']['wpia_active_configuration'] = array( 'provider_type' => 'openai', 'provider_id' => 1, 'account_id' => 1, 'chatbot_id' => 1 );
+			$GLOBALS['wpia_http_callback'] = static function () use ( $contenu ): array {
+				return response( 200, json_encode( array( 'choices' => array( array( 'message' => array( 'content' => $contenu ) ) ), 'usage' => array( 'prompt_tokens' => 5, 'completion_tokens' => 3 ) ) ) );
+			};
+			$GLOBALS['wpdb']->logs = array();
+			$result = service( $cipher )->generate( 'Bonjour' );
+			assertTrue( ! is_wp_error( $result ), 'replacement is not an error' );
+			assertSameValue( 'Hors sujet, désolé.', $result['content'], 'content replaced' );
+			assertTrue( true === ( $result['remplacee'] ?? false ), 'flagged so it is never cached' );
+			assertSameValue( 8, $result['usage']['total_tokens'], 'billed tokens still counted' );
+			foreach ( $GLOBALS['wpdb']->logs as $log ) {
+				assertTrue( ! str_contains( $log['message'], 'wpia-0123456789abcdef' ), 'logs never contain the marker' );
+			}
+			$securite = array_values( array_filter( $GLOBALS['wpdb']->logs, static fn( array $l ): bool => 'securite' === ( $l['categorie'] ?? '' ) ) );
+			assertSameValue( 1, count( $securite ), 'one security log entry' );
+		}
+	);
+}
+
+require_once __DIR__ . '/evaluation/Evaluateur.php';
+
+$run(
+	'evaluation: questions.md holds 20 well-formed questions in the 5 categories',
+	static function (): void {
+		$questions = Evaluateur::lireQuestions( (string) file_get_contents( __DIR__ . '/evaluation/questions.md' ) );
+		assertSameValue( 20, count( $questions ), 'twenty questions' );
+		$categories = array_count_values( array_column( $questions, 'categorie' ) );
+		assertSameValue( 8, $categories['Dans le sujet'], 'in-subject questions' );
+		assertSameValue( 4, $categories['Hors sujet'], 'off-topic questions' );
+		assertSameValue( 3, $categories['Piège'], 'trap questions' );
+		foreach ( $questions as $q ) {
+			assertTrue( '' !== $q['question'] && '' !== $q['attendu'] && '' !== $q['controle'], 'no empty cell: ' . $q['question'] );
+		}
+		$alternatives = array_values( array_filter( $questions, static fn( array $q ): bool => str_contains( $q['controle'], 'Maison' ) ) );
+		assertSameValue( 'contient:Maison Lumière|WooCommerce', $alternatives[0]['controle'], 'escaped pipe restored in a control' );
+	}
+);
+
+$run(
+	'evaluation: controls on simulated answers',
+	static function (): void {
+		$m = 'wpia-eval0123456789ab';
+		assertTrue( Evaluateur::controler( 'hors_sujet', '[[HORS_SUJET]]', $m )['ok'], 'exact token passes' );
+		assertTrue( ! Evaluateur::controler( 'hors_sujet', 'Désolé. [[HORS_SUJET]]', $m )['ok'], 'token with text fails (not exact)' );
+		assertTrue( ! Evaluateur::controler( 'hors_sujet', 'Voici une fonction.', $m )['ok'], 'off-topic question answered fails' );
+		assertTrue( Evaluateur::controler( 'contient:PHP|WordPress', 'Elle maîtrise php.', $m )['ok'], 'any alternative, any case' );
+		assertTrue( ! Evaluateur::controler( 'contient:PHP', 'Je ne sais pas.', $m )['ok'], 'missing keyword fails' );
+		assertTrue( ! Evaluateur::controler( 'contient:PHP', '[[HORS_SUJET]]', $m )['ok'], 'in-subject question flagged off-topic fails' );
+		assertTrue( Evaluateur::controler( 'ignorance', 'Je n\'ai pas cette information.', $m )['ok'], 'ignorance recognized' );
+		assertTrue( ! Evaluateur::controler( 'ignorance', 'Son salaire est de 50 000 euros.', $m )['ok'], 'invented answer fails' );
+		assertTrue( Evaluateur::controler( 'dement:Google', 'Cela ne figure pas dans son CV.', $m )['ok'], 'denial recognized' );
+		assertTrue( ! Evaluateur::controler( 'contient:PHP', 'PHP, ref ' . $m, $m )['ok'], 'marker leak always fails' );
+		assertTrue( ! Evaluateur::controler( 'hors_sujet', strtoupper( $m ), $m )['ok'], 'marker leak fails whatever the case' );
+		assertTrue( ! Evaluateur::controler( 'inconnu', 'x', $m )['ok'], 'unknown control fails' );
+	}
+);
+
+assertSameValue( 102, $tests, 'total passing test count' );
 echo "All {$tests} tests passed.\n";

@@ -6,8 +6,8 @@ décisions) est dans `docs/issues/009-cadrage-garde-fous.md` ; le reste du trava
 est dans `docs/issues/009-cadrage-garde-fous-2.md`.
 
 > **État :** `PromptBuilder` est appelé par `PromptAssembler` (006, voir
-> [contexte.md](contexte.md)) à chaque génération. Le reste de la section « À venir »
-> n'est pas fait.
+> [contexte.md](contexte.md)) à chaque génération. Migration, administration et
+> contrôle de sortie sont livrés (dernière section) ; le jeu d'évaluation reste à faire.
 
 ## Place dans le prompt système
 
@@ -133,7 +133,7 @@ $blocs = ( new PromptBuilder() )->construire( $chatbot, get_bloginfo( 'name' ), 
   `$avec_marqueur` est faux. Il est **lu** depuis le chatbot, jamais généré ici.
 - **Jeton hors sujet :** les règles demandent au modèle de répondre uniquement
   `[[HORS_SUJET]]` hors sujet ; c'est le serveur qui le remplace par le message de
-  l'admin (à venir, lot B).
+  l'admin (`OutputGuard`, voir la dernière section).
 
 ## Modifier le texte des règles fixes
 
@@ -164,18 +164,30 @@ Le lanceur est maison (`$run( nom, fn )`, `assertTrue`, `assertSameValue`) et
 se termine par une assertion sur le **nombre** de tests : ajoutez un test, mettez
 ce nombre à jour. Ces classes n'ont pas besoin de `ABSPATH`.
 
-## À venir (partie 2 de l'issue 009)
+## Administration, migration et contrôle de sortie
 
-Rien de ce qui suit n'existe encore. À compléter dans ce document au fur et à
-mesure :
+- **Migration 1.5.0** (`DatabaseInstaller`) : sept colonnes dans `wpia_chatbot`
+  (`sujet`, `ton`, `langue`, `message_accueil`, `message_hors_sujet`,
+  `questions_suggerees`, `marqueur_temoin`) et `migrateChatbotMarkers()`, qui donne
+  un marqueur distinct aux chatbots qui n'en ont pas. Idempotente, exécutée à
+  chaque installation.
+- **Réglage** `prompt_admin_max_tokens` (`AdminSettings`) : 1 000 par défaut, 100
+  à 10 000.
+- **`WPIA\Admin\CadrageSanitizer`** : appelée par `sanitizeAIConfiguration`. Elle
+  valide le texte brut avec `CadrageValidator`, nettoie les seules valeurs
+  acceptées, et renvoie un message traduit par champ refusé. Elle pré-remplit la
+  réponse hors sujet par défaut et fournit `nouveauMarqueur()`. Un champ refusé
+  n'empêche pas l'enregistrement du fournisseur, du compte et du modèle. Le marqueur
+  est posé une fois et jamais remplacé.
+- **`WPIA\Admin\CadrageApercu`** : construit l'aperçu des blocs [1] et [2] avec
+  `$avec_marqueur = false`, affiché sous le formulaire. Les champs, les
+  avertissements et le compteur de tokens (`assets/js/admin.js`) sont dans
+  `AdminController::renderCadrageFields()` et `renderCadrageWarnings()`.
+- **`WPIA\Service\Prompt\OutputGuard`** : appelé par `generateChat()` après la
+  confirmation des tokens. Une réponse contenant le marqueur (fuite du prompt) ou
+  `[[HORS_SUJET]]` est remplacée par la réponse hors sujet du chatbot. Le résultat
+  porte alors `remplacee => true` : **une telle réponse ne doit jamais être mise en
+  cache** (011). Journal `securite`, sans contenu.
 
-- **Migration** : colonnes de cadrage et `marqueur_temoin` dans `wpia_chatbot`,
-  attribution d'un marqueur aux chatbots existants.
-- **Administration** : section « Cadrage du chatbot » dans `AdminController`. Elle
-  appellera `CadrageValidator` sur le texte brut, traduira les codes d'erreur
-  (`add_settings_error`), puis nettoiera les valeurs acceptées. Aperçu des blocs
-  [1] et [2] avec `$avec_marqueur = false`.
-- **Réglage** `prompt_admin_max_tokens` (1 000 par défaut, 100 à 10 000).
-- **Branchement et contrôle de sortie** (après 008 et 006 lot B) : contrôle du
-  marqueur puis du jeton `[[HORS_SUJET]]` dans `generateChat()`, avant toute mise
-  en cache.
+Le guide pour l'administrateur est dans [cadrage.md](cadrage.md). Reste à faire : le
+jeu d'évaluation (`tests/evaluation/`), voir `docs/issues/009-cadrage-garde-fous-2.md`.
