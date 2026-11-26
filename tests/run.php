@@ -426,7 +426,11 @@ foreach ( array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom' ) as $type
 			assertTrue( str_ends_with( $capture['url'], $paths[ $type ] ), $type . ' endpoint' );
 			$payload = json_decode( $capture['args']['body'], true );
 			assertSameValue( 'test-model', $payload['model'], $type . ' configured model' );
-			assertSameValue( 0.4, 'ollama' === $type ? $payload['options']['temperature'] : $payload['temperature'], $type . ' temperature' );
+			if ( 'anthropic' === $type ) {
+				assertTrue( ! array_key_exists( 'temperature', $payload ), 'anthropic must not send temperature' );
+			} else {
+				assertSameValue( 0.4, 'ollama' === $type ? $payload['options']['temperature'] : $payload['temperature'], $type . ' temperature' );
+			}
 			assertSameValue( 64, 'ollama' === $type ? $payload['options']['num_predict'] : ( 'anthropic' === $type ? $payload['max_tokens'] : $payload['max_tokens'] ), $type . ' token cap' );
 			assertTrue( ! str_contains( $capture['args']['body'], 'test-secret-never-log' ), $type . ' must not include the secret in the body' );
 
@@ -1368,7 +1372,7 @@ foreach ( array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom' ) as $type
 			$user     = array( 'role' => 'user', 'content' => 'Bonjour' );
 			$expected = array(
 				'openai'    => array( 'model' => 'test-model', 'messages' => array( $system, $user ), 'temperature' => 0.4, 'max_tokens' => 80 ),
-				'anthropic' => array( 'model' => 'test-model', 'max_tokens' => 80, 'messages' => array( $user ), 'temperature' => 0.4, 'system' => 'Réponds brièvement.' ),
+				'anthropic' => array( 'model' => 'test-model', 'max_tokens' => 80, 'messages' => array( $user ), 'system' => 'Réponds brièvement.' ),
 				'ollama'    => array( 'model' => 'test-model', 'messages' => array( $system, $user ), 'stream' => false, 'options' => array( 'temperature' => 0.4, 'num_predict' => 80 ) ),
 			);
 			$expected['mistral'] = $expected['openai'];

@@ -11,7 +11,7 @@
 	'use strict';
 
 	var cfg = window.wpiaChat;
-	if ( ! cfg || ! cfg.restUrl ) {
+	if ( ! cfg || ! cfg.sessionUrl || ! cfg.chatUrl ) {
 		return;
 	}
 	var T = cfg.textes || {};
@@ -85,7 +85,12 @@
 		}
 	}
 
-	function request( method, path, nonce, body ) {
+	/** Ajoute un paramètre de requête : `&` si l'URL en a déjà un (permaliens « Simple » : `?rest_route=…`). */
+	function withParam( url, key, value ) {
+		return url + ( -1 === url.indexOf( '?' ) ? '?' : '&' ) + encodeURIComponent( key ) + '=' + encodeURIComponent( value );
+	}
+
+	function request( method, url, nonce, body ) {
 		var headers = { Accept: 'application/json' };
 		if ( nonce ) {
 			headers[ 'X-WP-Nonce' ] = nonce;
@@ -93,7 +98,7 @@
 		if ( body ) {
 			headers[ 'Content-Type' ] = 'application/json';
 		}
-		return fetch( cfg.restUrl + path, {
+		return fetch( url, {
 			method: method,
 			headers: headers,
 			credentials: 'same-origin',
@@ -250,7 +255,7 @@
 	/** Nonce et configuration : toujours depuis le serveur, jamais depuis la page (cache de page). */
 	Chat.prototype.fetchSession = function () {
 		var self = this;
-		return request( 'GET', '/session?chatbot=' + this.id, '' ).then( function ( result ) {
+		return request( 'GET', withParam( cfg.sessionUrl, 'chatbot', this.id ), '' ).then( function ( result ) {
 			if ( 200 !== result.status || ! result.data.nonce ) {
 				return false;
 			}
@@ -364,7 +369,7 @@
 	/** Un seul renvoi transparent si le nonce est périmé (403). */
 	Chat.prototype.post = function ( text, history, canRetry ) {
 		var self = this;
-		return request( 'POST', '/chat', this.nonce, { chatbot: this.id, message: text, historique: history } ).then( function ( result ) {
+		return request( 'POST', cfg.chatUrl, this.nonce, { chatbot: this.id, message: text, historique: history } ).then( function ( result ) {
 			if ( 403 === result.status && canRetry ) {
 				return self.fetchSession().then( function ( ok ) {
 					return ok ? self.post( text, history, false ) : result;
