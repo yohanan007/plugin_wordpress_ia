@@ -14,10 +14,13 @@ class MistralProvider extends AbstractProvider {
 			untrailingslashit( $base_url ) . '/chat/completions',
 			array( 'Authorization' => 'Bearer ' . $api_key ),
 			array(
-				'model'       => $parameters['model'],
-				'messages'    => $messages,
-				'temperature' => $parameters['temperature'],
-				'max_tokens'  => $parameters['max_tokens'],
+				'model'            => $parameters['model'],
+				'messages'         => $messages,
+				'temperature'      => $parameters['temperature'],
+				'max_tokens'       => $parameters['max_tokens'],
+				// Réponse rapide, sans bloc de réflexion (modèles hybrides comme
+				// Mistral Small 4). Non réglable dans l'admin.
+				'reasoning_effort' => 'none',
 			),
 			$parameters['timeout']
 		);

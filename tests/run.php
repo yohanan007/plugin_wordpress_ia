@@ -1375,7 +1375,7 @@ foreach ( array( 'openai', 'mistral', 'anthropic', 'ollama', 'custom' ) as $type
 				'anthropic' => array( 'model' => 'test-model', 'max_tokens' => 80, 'messages' => array( $user ), 'system' => 'Réponds brièvement.' ),
 				'ollama'    => array( 'model' => 'test-model', 'messages' => array( $system, $user ), 'stream' => false, 'options' => array( 'temperature' => 0.4, 'num_predict' => 80 ) ),
 			);
-			$expected['mistral'] = $expected['openai'];
+			$expected['mistral'] = $expected['openai'] + array( 'reasoning_effort' => 'none' );
 			$expected['custom']  = $expected['openai'];
 			assertSameValue( json_encode( $expected[ $type ], JSON_UNESCAPED_UNICODE ), $capture->body, $type . ' body' );
 		}
@@ -2441,5 +2441,47 @@ $run(
 	}
 );
 
-assertSameValue( 111, $tests, 'total passing test count' );
+$run(
+	'normalizer: chat completions content parts keep only text, thinking is dropped',
+	static function (): void {
+		$normalizer = new WPIA\Service\Ia\ResponseNormalizer();
+		$normalize  = static fn( array $content ) => $normalizer->normalize(
+			'mistral',
+			response( 200, json_encode( array( 'choices' => array( array( 'message' => array( 'content' => $content ) ) ) ) ) ),
+			'm',
+			100
+		);
+
+		$thinking = array( 'type' => 'thinking', 'thinking' => array( array( 'type' => 'text', 'text' => 'je réfléchis' ) ) );
+		$result   = $normalize( array( $thinking, array( 'type' => 'text', 'text' => 'Bonjour' ) ) );
+		assertSameValue( 'Bonjour', $result['content'], 'thinking + text gives the text only' );
+
+		$result = $normalize( array( $thinking ) );
+		assertSameValue( 'wpia_empty_response', $result->get_error_code(), 'thinking only is an empty response' );
+
+		$result = $normalize( array( array( 'type' => 'thinking', 'text' => 'secret' ), array( 'type' => 'text', 'text' => 'ok' ) ) );
+		assertSameValue( 'ok', $result['content'], 'a non-text part with a text key is never shown' );
+
+		$result = $normalize( array( array( 'text' => 'Bon' ), array( 'text' => 'jour' ) ) );
+		assertSameValue( 'Bonjour', $result['content'], 'parts without type are still accepted' );
+
+		$result = $normalize( array( 'Bonjour' ) );
+		assertSameValue( 'wpia_invalid_response', $result->get_error_code(), 'a non-array part is invalid' );
+
+		$result = $normalize( array( array( 'type' => 'text', 'text' => 123 ) ) );
+		assertSameValue( 'wpia_invalid_response', $result->get_error_code(), 'a text part without string text is invalid' );
+
+		$result = $normalize( array() );
+		assertSameValue( 'wpia_empty_response', $result->get_error_code(), 'an empty part list is an empty response' );
+	}
+);
+
+$run(
+	'catalog: Anthropic defaults to claude-haiku-5-5',
+	static function (): void {
+		assertSameValue( 'claude-haiku-5-5', WPIA\Service\Ia\AIProviderCatalog::all()['anthropic']['model'], 'anthropic default model' );
+	}
+);
+
+assertSameValue( 113, $tests, 'total passing test count' );
 echo "All {$tests} tests passed.\n";

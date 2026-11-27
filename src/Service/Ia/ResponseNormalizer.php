@@ -133,15 +133,26 @@ class ResponseNormalizer {
 			return null;
 		}
 
+		// Morceaux au format chat completions. Seuls les morceaux texte sont gardés :
+		// les autres (`thinking` de Mistral Small 4, `reference`…) sont ignorés pour
+		// ne jamais montrer le raisonnement au visiteur. Un morceau sans `type` mais
+		// avec `text` reste accepté. Aucun morceau texte → '' (wpia_empty_response).
 		$parts = array();
 		foreach ( $content as $part ) {
-			if ( ! is_array( $part ) || ! isset( $part['text'] ) || ! is_string( $part['text'] ) ) {
+			if ( ! is_array( $part ) ) {
+				return null;
+			}
+			$type = $part['type'] ?? 'text';
+			if ( 'text' !== $type ) {
+				continue;
+			}
+			if ( ! isset( $part['text'] ) || ! is_string( $part['text'] ) ) {
 				return null;
 			}
 			$parts[] = $part['text'];
 		}
 
-		return empty( $parts ) ? null : implode( '', $parts );
+		return implode( '', $parts );
 	}
 
 	/**

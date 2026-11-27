@@ -106,6 +106,18 @@ utilise `/api/chat`. Le fournisseur personnalisé doit donc exposer une API
 compatible OpenAI. Les appels externes utilisent l’API HTTP sûre de WordPress ;
 Ollama est autorisé en HTTP uniquement sur localhost.
 
+Mistral reçoit toujours `reasoning_effort: "none"` : les modèles hybrides comme
+Mistral Small 4 (`mistral-small-latest`) répondent alors vite, sans bloc de
+réflexion. Ce réglage n’est pas modifiable dans l’administration. Quand
+`content` est un tableau de morceaux, seuls les morceaux texte sont gardés (un
+morceau sans `type` compte comme texte) ; les morceaux de réflexion ne sont
+jamais montrés au visiteur.
+
+Le modèle Anthropic proposé par défaut est `claude-haiku-5-5`. Il ne sert qu’à
+préremplir le champ « Modèle » : un chatbot déjà enregistré garde son modèle.
+Si un ancien chatbot Anthropic utilise encore `claude-3-5-haiku-latest`
+(retiré), remplacez le modèle dans l’administration.
+
 ## Erreurs et confidentialité
 
 `generate()` retourne un `WP_Error` en cas d’erreur. Ses codes distinguent les

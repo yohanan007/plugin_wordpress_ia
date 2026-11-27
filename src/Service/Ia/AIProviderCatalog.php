@@ -21,7 +21,7 @@ class AIProviderCatalog {
 			'anthropic' => array(
 				'label' => __( 'Anthropic', 'plugin-wordpress-ia' ),
 				'url'   => 'https://api.anthropic.com/v1',
-				'model' => 'claude-3-5-haiku-latest',
+				'model' => 'claude-haiku-5-5',
 			),
 			'ollama' => array(
 				'label' => __( 'Ollama (local)', 'plugin-wordpress-ia' ),
