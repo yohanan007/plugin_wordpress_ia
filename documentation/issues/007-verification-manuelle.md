@@ -23,6 +23,7 @@
 | 1.5 | Même chose connecté en administrateur | Un message gris explique que le chat n'est pas affiché |
 | 1.6 | Rétablir l'affichage, puis `[wpia_chat chatbot="999"]` | Rien pour l'anonyme (chatbot introuvable) ; remettre `[wpia_chat]` ensuite |
 | 1.7 | Rendre le chatbot inactif | Rien pour l'anonyme ; `GET /wp-json/wpia/v1/session` répond 404 ; le réactiver ensuite |
+| 1.8 | Réglages → Permaliens : « Simple », puis ouvrir le chat et envoyer un message | Requêtes `…/?rest_route=/wpia/v1/session&chatbot=ID` (un seul `?`) puis `…/?rest_route=/wpia/v1/chat`, toutes deux en 200. Rétablir ensuite les permaliens d'origine |
 
 ## 2. Visiteur anonyme (critère *Visiteur anonyme*)
 

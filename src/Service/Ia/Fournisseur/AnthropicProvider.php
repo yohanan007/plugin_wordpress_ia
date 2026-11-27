@@ -18,11 +18,13 @@ class AnthropicProvider extends AbstractProvider {
 	 * @return array|\WP_Error
 	 */
 	public function generate( string $base_url, string $api_key, array $parameters ): array|\WP_Error {
+		// Pas de `temperature` : les modèles Claude récents la refusent (400
+		// « temperature is deprecated for this model »). La température configurée
+		// ne s'applique donc pas aux chatbots Anthropic.
 		$payload = array(
 			'model'      => $parameters['model'],
 			'max_tokens' => $parameters['max_tokens'],
 			'messages'   => $this->buildMessages( $parameters['messages'] ),
-			'temperature' => $parameters['temperature'],
 		);
 		$systeme = $parameters['systeme'];
 		if ( TokenEstimator::estimer( $systeme['stable'] ) > self::SEUIL_CACHE_TOKENS ) {
