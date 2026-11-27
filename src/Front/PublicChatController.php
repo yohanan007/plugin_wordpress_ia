@@ -89,7 +89,10 @@ final class PublicChatController {
 			'wpia-chat',
 			'wpiaChat',
 			array(
-				'restUrl'         => esc_url_raw( rest_url( self::NAMESPACE_REST ) ),
+				// URL complètes, construites par WordPress : avec les permaliens « Simple »,
+				// rest_url() renvoie `?rest_route=…`, auquel on ne peut pas concaténer un chemin.
+				'sessionUrl'      => esc_url_raw( rest_url( self::NAMESPACE_REST . '/session' ) ),
+				'chatUrl'         => esc_url_raw( rest_url( self::NAMESPACE_REST . '/chat' ) ),
 				'confidentialite' => $confidentialite ? esc_url_raw( $confidentialite ) : '',
 				'textes'          => array(
 					'ouvrir'          => __( 'Ouvrir le chat', 'plugin-wordpress-ia' ),
